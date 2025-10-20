@@ -16,7 +16,7 @@ services:
       - ./log:/app/log                   # ← Application logs
       - ./logs:/app/logs
       - ./strategies:/app/strategies     # ← Python strategies (MAIN FIX)
-      - ./keys:/app/keys                 # ← API keys/certificates
+      # - ./keys:/app/keys                 # ← API keys/certificates
       - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
