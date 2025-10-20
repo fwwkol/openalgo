@@ -13,11 +13,11 @@ services:
     # persistent DB, logs + mount the host .env read-only so dotenv can read it
     volumes:
       - openalgo_db:/app/db
-      - ./log:/app/log                   # ← Application logs
-      - ./logs:/app/logs
-      - ./strategies:/app/strategies     # ← Python strategies (MAIN FIX)
-      # - ./keys:/app/keys                 # ← API keys/certificates
-      - ./.env:/app/.env:ro
+      - /var/www/docker-volume/oalgo/log:/app/log                   # ← Application logs
+      - /var/www/docker-volume/oalgo/logs:/app/logs
+      - /var/www/docker-volume/oalgo/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
+      - /var/www/docker-volume/oalgo/keys:/app/keys                 # ← API keys/certificates
+      # - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
     environment:
