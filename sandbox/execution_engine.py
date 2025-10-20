@@ -104,6 +104,7 @@ class ExecutionEngine:
         """
         Fetch real-time quote for a symbol using API key
         Returns dict with ltp, high, low, open, close, etc.
+        Returns None if quote cannot be fetched (permission error, API error, etc.)
         """
         try:
             # Get any user's API key for fetching quotes
@@ -111,7 +112,7 @@ class ExecutionEngine:
             api_key_obj = ApiKeys.query.first()
 
             if not api_key_obj:
-                logger.warning("No API keys found for fetching quotes")
+                logger.debug("No API keys found for fetching quotes")
                 return None
 
             # Decrypt the API key
@@ -129,11 +130,13 @@ class ExecutionEngine:
                 logger.debug(f"Fetched quote for {symbol}: LTP={quote_data.get('ltp', 0)}")
                 return quote_data
             else:
-                logger.warning(f"Failed to fetch quote for {symbol}: {response.get('message', 'Unknown error')}")
+                # Log at debug level to avoid spam for permission errors
+                logger.debug(f"Could not fetch quote for {symbol}: {response.get('message', 'Unknown error')}")
                 return None
 
         except Exception as e:
-            logger.error(f"Error fetching quote for {symbol} on {exchange}: {e}")
+            # Handle all exceptions gracefully - don't stop execution engine
+            logger.debug(f"Exception fetching quote for {symbol}: {str(e)}")
             return None
 
     def _process_order(self, order, quote):
@@ -142,6 +145,23 @@ class ExecutionEngine:
         Determines if order should be executed based on price type
         """
         try:
+            # Check if this order already has a trade (prevent duplicates)
+            # This can happen with MARKET orders that are executed immediately on placement
+            # but the order status hasn't been updated to 'complete' yet due to race condition
+            existing_trade = SandboxTrades.query.filter_by(orderid=order.orderid).first()
+            if existing_trade:
+                logger.debug(f"Order {order.orderid} already has trade {existing_trade.tradeid}, skipping execution")
+                # Update order status to complete if it's still open (race condition cleanup)
+                if order.order_status == 'open':
+                    order.order_status = 'complete'
+                    order.average_price = existing_trade.price
+                    order.filled_quantity = order.quantity
+                    order.pending_quantity = 0
+                    order.update_timestamp = datetime.now(pytz.timezone('Asia/Kolkata'))
+                    db_session.commit()
+                    logger.info(f"Updated order {order.orderid} status to complete (was in race condition)")
+                return
+
             ltp = Decimal(str(quote.get('ltp', 0)))
             bid = Decimal(str(quote.get('bid', 0)))
             ask = Decimal(str(quote.get('ask', 0)))
@@ -282,7 +302,8 @@ class ExecutionEngine:
 
             if not position:
                 # Create new position
-                # Margin already blocked at order placement time
+                # Store the exact margin that was blocked at order placement time
+                order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
                 position = SandboxPositions(
                     user_id=order.user_id,
                     symbol=order.symbol,
@@ -294,10 +315,11 @@ class ExecutionEngine:
                     pnl=Decimal('0.00'),
                     pnl_percent=Decimal('0.00'),
                     accumulated_realized_pnl=Decimal('0.00'),
+                    margin_blocked=order_margin,  # Store exact margin from order
                     created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
                 )
                 db_session.add(position)
-                logger.info(f"Created new position: {order.symbol} {order.action} {order.quantity} (margin already blocked: ₹{order.margin_blocked})")
+                logger.info(f"Created new position: {order.symbol} {order.action} {order.quantity} (margin blocked: ₹{order_margin})")
 
             else:
                 # Update existing position (netting logic)
@@ -314,7 +336,10 @@ class ExecutionEngine:
                     position.pnl = Decimal('0.00')  # Reset current P&L (will be updated by MTM)
                     position.pnl_percent = Decimal('0.00')
                     # accumulated_realized_pnl stays as is from previous closed trades
-                    logger.info(f"Reopened position: {order.symbol} {order.action} {order.quantity} (accumulated realized P&L: ₹{position.accumulated_realized_pnl}) (margin already blocked: ₹{order.margin_blocked})")
+                    # Store the exact margin that was blocked at order placement time
+                    order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
+                    position.margin_blocked = order_margin
+                    logger.info(f"Reopened position: {order.symbol} {order.action} {order.quantity} (accumulated realized P&L: ₹{position.accumulated_realized_pnl}) (margin blocked: ₹{order_margin})")
 
                 elif final_quantity == 0:
                     # Position closed completely
@@ -324,42 +349,24 @@ class ExecutionEngine:
                         abs(new_quantity), execution_price
                     )
 
-                    # Determine what margin to release
-                    # If this order had margin blocked (order.margin_blocked), it means order was opening/adding position
-                    # If order had no margin blocked (0), it means order was reducing an existing position
-                    order_margin_blocked = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0')
+                    # Release the EXACT margin that was stored in the position
+                    # This prevents over-release when execution price differs from order placement price
+                    margin_to_release = position.margin_blocked if hasattr(position, 'margin_blocked') and position.margin_blocked else Decimal('0.00')
 
-                    if order_margin_blocked == Decimal('0'):
-                        # This order was reducing/closing existing position - no margin was blocked for it
-                        # We need to release margin for the old position that's now closed
-                        # Determine the original position action (BUY for long, SELL for short)
-                        position_action = 'BUY' if old_quantity > 0 else 'SELL'
-                        margin_to_release, _ = fund_manager.calculate_margin_required(
-                            order.symbol, order.exchange, order.product,
-                            abs(old_quantity), position.average_price, position_action
-                        )
-                        if margin_to_release:
-                            fund_manager.release_margin(
-                                margin_to_release,
-                                realized_pnl,
-                                f"Position closed: {order.symbol}"
-                            )
-                            logger.info(f"Released margin ₹{margin_to_release} for closed position (old position margin)")
-                    else:
-                        # This order had margin blocked at placement time
-                        # Release the exact margin that was blocked for this order
+                    if margin_to_release > 0:
                         fund_manager.release_margin(
-                            order_margin_blocked,
+                            margin_to_release,
                             realized_pnl,
                             f"Position closed: {order.symbol}"
                         )
-                        logger.info(f"Released margin ₹{order_margin_blocked} for closed position (order margin)")
+                        logger.info(f"Released exact margin ₹{margin_to_release} for closed position (from position.margin_blocked)")
 
                     # Keep position with 0 quantity to show it was closed
                     # Add realized P&L to accumulated realized P&L (for day's trading)
                     position.accumulated_realized_pnl += realized_pnl
 
                     position.quantity = 0
+                    position.margin_blocked = Decimal('0.00')  # Reset margin to 0 when position fully closed
                     position.ltp = execution_price
                     position.pnl = position.accumulated_realized_pnl  # Display total accumulated P&L
                     position.pnl_percent = Decimal('0.00')
@@ -376,11 +383,13 @@ class ExecutionEngine:
                     position.average_price = new_average_price
                     position.ltp = execution_price
 
-                    # Margin already blocked at order placement time - no action needed
-                    logger.info(f"Added to position: {order.symbol}, New qty: {final_quantity}, Avg: {new_average_price} (margin already blocked: ₹{order.margin_blocked})")
+                    # Accumulate margin - add the margin blocked for this order to existing position margin
+                    order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
+                    position.margin_blocked = (position.margin_blocked if hasattr(position, 'margin_blocked') and position.margin_blocked else Decimal('0.00')) + order_margin
+                    logger.info(f"Added to position: {order.symbol}, New qty: {final_quantity}, Avg: {new_average_price} (total margin blocked: ₹{position.margin_blocked})")
 
                 else:
-                    # Reducing position (opposite direction)
+                    # Reducing position (opposite direction) or position reversal
                     reduced_quantity = min(abs(old_quantity), abs(new_quantity))
 
                     # Calculate realized P&L for reduced portion
@@ -389,37 +398,59 @@ class ExecutionEngine:
                         reduced_quantity, execution_price
                     )
 
-                    # Release margin for reduced quantity
-                    # Use position's average price for consistency (same price used when margin was blocked)
-                    # Determine the original position action (BUY for long, SELL for short)
-                    position_action = 'BUY' if old_quantity > 0 else 'SELL'
-                    margin_to_release, _ = fund_manager.calculate_margin_required(
-                        order.symbol, order.exchange, order.product,
-                        reduced_quantity, position.average_price, position_action
-                    )
+                    # Add realized P&L to accumulated realized P&L
+                    # This tracks all partial closes throughout the day
+                    position.accumulated_realized_pnl = (position.accumulated_realized_pnl or Decimal('0.00')) + realized_pnl
 
-                    if margin_to_release:
+                    # Release margin PROPORTIONALLY for reduced quantity
+                    # Use exact margin stored in position, release proportionally
+                    current_margin = position.margin_blocked if hasattr(position, 'margin_blocked') and position.margin_blocked else Decimal('0.00')
+
+                    if abs(old_quantity) > 0:
+                        # Calculate proportion of position being reduced
+                        reduction_proportion = Decimal(str(reduced_quantity)) / Decimal(str(abs(old_quantity)))
+                        margin_to_release = current_margin * reduction_proportion
+                    else:
+                        margin_to_release = Decimal('0.00')
+
+                    if margin_to_release > 0:
                         fund_manager.release_margin(
                             margin_to_release,
                             realized_pnl,
                             f"Position reduced: {order.symbol}"
                         )
-                        logger.info(f"Released margin ₹{margin_to_release} for reduced position")
+                        logger.info(f"Released proportional margin ₹{margin_to_release} for reduced position ({reduction_proportion*100:.1f}% of ₹{current_margin})")
 
-                    # If position reversed, recalculate average price for new position
+                    # Update remaining margin after proportional release
+                    remaining_margin = current_margin - margin_to_release
+
+                    # If position reversed, set margin for new reversed position
                     if abs(new_quantity) > abs(old_quantity):
-                        # Position reversed
+                        # Position reversed - remaining quantity creates opposite position
                         remaining_quantity = abs(new_quantity) - abs(old_quantity)
                         position.quantity = remaining_quantity if order.action == 'BUY' else -remaining_quantity
                         position.average_price = execution_price
-                        # Margin for excess quantity already blocked at order time - no action needed
-                        logger.info(f"Position reversed: {order.symbol}, New qty: {position.quantity} (excess margin already blocked: ₹{order.margin_blocked})")
+
+                        # For reversed position, the new margin comes from the excess quantity in the order
+                        # The old position's margin was fully released, new position gets fresh margin
+                        # Note: order.margin_blocked contains margin for the FULL order quantity
+                        # We need to calculate what portion corresponds to the excess quantity
+                        if abs(new_quantity) > 0:
+                            excess_proportion = Decimal(str(remaining_quantity)) / Decimal(str(abs(new_quantity)))
+                            order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
+                            new_position_margin = order_margin * excess_proportion
+                            position.margin_blocked = new_position_margin
+                            logger.info(f"Position reversed: {order.symbol}, New qty: {position.quantity} (new margin: ₹{new_position_margin})")
+                        else:
+                            position.margin_blocked = Decimal('0.00')
                     else:
-                        # Position reduced but not reversed
+                        # Position reduced but not reversed - keep remaining margin
                         position.quantity = final_quantity
+                        position.margin_blocked = remaining_margin
+                        logger.info(f"Position reduced: {order.symbol}, New qty: {final_quantity}, Remaining margin: ₹{remaining_margin}")
 
                     position.ltp = execution_price
-                    logger.info(f"Reduced position: {order.symbol}, New qty: {final_quantity}, Realized P&L: ₹{realized_pnl}")
+                    logger.info(f"Partial close: {order.symbol}, New qty: {final_quantity}, Realized P&L: ₹{realized_pnl}")
 
             db_session.commit()
 

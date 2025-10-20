@@ -6,6 +6,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, DECIMAL, Date
 from sqlalchemy.sql import func
+from sqlalchemy.pool import NullPool
 from datetime import datetime
 from utils.logging import get_logger
 from dotenv import load_dotenv
@@ -20,12 +21,22 @@ load_dotenv()
 # Get from environment variable or use default path in /db directory
 SANDBOX_DATABASE_URL = os.getenv('SANDBOX_DATABASE_URL', 'sqlite:///db/sandbox.db')
 
-engine = create_engine(
-    SANDBOX_DATABASE_URL,
-    pool_size=20,
-    max_overflow=40,
-    pool_timeout=10
-)
+# Conditionally create engine based on DB type
+if SANDBOX_DATABASE_URL and 'sqlite' in SANDBOX_DATABASE_URL:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    engine = create_engine(
+        SANDBOX_DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    engine = create_engine(
+        SANDBOX_DATABASE_URL,
+        pool_size=20,
+        max_overflow=40,
+        pool_timeout=10
+    )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -107,6 +118,10 @@ class SandboxPositions(Base):
     pnl = Column(DECIMAL(10, 2), default=0.00)  # Current P&L (unrealized for open, realized for closed)
     pnl_percent = Column(DECIMAL(10, 4), default=0.00)  # P&L percentage
     accumulated_realized_pnl = Column(DECIMAL(10, 2), default=0.00)  # Accumulated realized P&L for the day
+
+    # Margin tracking - stores exact margin blocked for this position
+    # This prevents margin release bugs when execution price differs from order placement price
+    margin_blocked = Column(DECIMAL(15, 2), default=0.00)  # Total margin blocked for this position
 
     # Timestamps
     created_at = Column(DateTime, nullable=False, default=func.now())
