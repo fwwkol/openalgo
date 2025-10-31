@@ -5,18 +5,18 @@ services:
       context: .
       dockerfile: Dockerfile
 
-    container_name: openalgo-web
+    container_name: openalgo-beta
     ports:
       - "${FLASK_PORT:-5000}:5000"
       - "${WEBSOCKET_PORT:-8765}:8765"
 
     # persistent DB, logs + mount the host .env read-only so dotenv can read it
     volumes:
-      - openalgo_db:/app/db
-      - openalgo_logs:/app/logs          # Use named volume for logs
-      - /var/www/docker-volume/oalgo/log:/app/log                   # ← Application logs
-      - /var/www/docker-volume/oalgo/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
-      - /var/www/docker-volume/oalgo/keys:/app/keys                 # ← API keys/certificates
+      - openalgo_beta_db:/app/db
+      - openalgo_beta_logs:/app/logs          # Use named volume for logs
+      - /var/www/docker-volume/oalgo-beta/log:/app/log                   # ← Application logs
+      - /var/www/docker-volume/oalgo-beta/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
+      - /var/www/docker-volume/oalgo-beta/keys:/app/keys                 # ← API keys/certificates
       - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
@@ -28,7 +28,7 @@ services:
 
 # Define named volumes for database and logs persistence
 volumes:
-  openalgo_db:
+  openalgo_beta_db:
     driver: local
-  openalgo_logs:
+  openalgo_beta_logs:
     driver: local
