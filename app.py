@@ -57,6 +57,7 @@ from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
+from database.action_center_db import init_db as ensure_action_center_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -268,6 +269,28 @@ def create_app():
             session.clear()
             # Don't redirect here, let individual routes handle it
     
+    @app.errorhandler(400)
+    def csrf_error(error):
+        """Custom handler for CSRF errors (400 Bad Request)"""
+        from flask import request, jsonify, flash, redirect, url_for
+        error_description = str(error)
+
+        logger.warning(f"CSRF Error on {request.path}: {error_description}")
+
+        # Check if it's a CSRF error
+        if 'CSRF' in error_description or 'csrf' in error_description.lower():
+            if request.is_json or request.path.startswith('/api'):
+                return jsonify({
+                    'error': 'CSRF validation failed',
+                    'message': 'Security token expired or invalid. Please refresh the page and try again.'
+                }), 400
+            else:
+                flash('Security token expired. Please try again.', 'error')
+                return redirect(request.referrer or url_for('auth.login'))
+
+        # For other 400 errors
+        return str(error), 400
+
     @app.errorhandler(404)
     def not_found_error(error):
         from flask import request
@@ -319,10 +342,11 @@ def setup_environment(app):
             ('Latency DB', ensure_latency_tables_exists),
             ('Strategy DB', ensure_strategy_tables_exists),
             ('Sandbox DB', ensure_sandbox_tables_exists),
+            ('Action Center DB', ensure_action_center_tables_exists),
         ]
 
         db_init_start = time.time()
-        with ThreadPoolExecutor(max_workers=11) as executor:
+        with ThreadPoolExecutor(max_workers=12) as executor:
             # Submit all database initialization tasks
             futures = {executor.submit(func): name for name, func in db_init_functions}
 
