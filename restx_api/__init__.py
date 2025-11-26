@@ -12,6 +12,7 @@ from .cancel_order import api as cancel_order_ns
 from .close_position import api as close_position_ns
 from .cancel_all_order import api as cancel_all_order_ns
 from .quotes import api as quotes_ns
+from .multiquotes import api as multiquotes_ns
 from .history import api as history_ns
 from .depth import api as depth_ns
 from .intervals import api as intervals_ns
@@ -30,6 +31,7 @@ from .search import api as search_ns
 from .expiry import api as expiry_ns
 from .option_symbol import api as option_symbol_ns
 from .options_order import api as options_order_ns
+from .options_multiorder import api as options_multiorder_ns
 from .option_greeks import api as option_greeks_ns
 from .synthetic_future import api as synthetic_future_ns
 from .analyzer import api as analyzer_ns
@@ -46,6 +48,7 @@ api.add_namespace(cancel_order_ns, path='/cancelorder')
 api.add_namespace(close_position_ns, path='/closeposition')
 api.add_namespace(cancel_all_order_ns, path='/cancelallorder')
 api.add_namespace(quotes_ns, path='/quotes')
+api.add_namespace(multiquotes_ns, path='/multiquotes')
 api.add_namespace(history_ns, path='/history')
 api.add_namespace(depth_ns, path='/depth')
 api.add_namespace(intervals_ns, path='/intervals')
@@ -64,6 +67,7 @@ api.add_namespace(search_ns, path='/search')
 api.add_namespace(expiry_ns, path='/expiry')
 api.add_namespace(option_symbol_ns, path='/optionsymbol')
 api.add_namespace(options_order_ns, path='/optionsorder')
+api.add_namespace(options_multiorder_ns, path='/optionsmultiorder')
 api.add_namespace(option_greeks_ns, path='/optiongreeks')
 api.add_namespace(synthetic_future_ns, path='/syntheticfuture')
 api.add_namespace(analyzer_ns, path='/analyzer')
