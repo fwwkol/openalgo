@@ -5,18 +5,18 @@ services:
       context: .
       dockerfile: Dockerfile
 
-    container_name: openalgo-beta
+    container_name: kotak-openalgo
     ports:
       - "${FLASK_PORT:-5000}:5000"
       - "${WEBSOCKET_PORT:-8765}:8765"
 
     # persistent DB, logs + mount the host .env read-only so dotenv can read it
     volumes:
-      - openalgo_beta_db:/app/db
-      - openalgo_beta_logs:/app/logs          # Use named volume for logs
-      - /var/www/docker-volume/oalgo-beta/log:/app/log                   # ← Application logs
-      - /var/www/docker-volume/oalgo-beta/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
-      - /var/www/docker-volume/oalgo-beta/keys:/app/keys                 # ← API keys/certificates
+      - kotak_openalgo_db:/app/db
+      - kotak_openalgo_logs:/app/logs          # Use named volume for logs
+      - /var/www/docker-volume/kotak/openalgo/log:/app/log                   # ← Application logs
+      - /var/www/docker-volume/kotak/openalgo/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
+      - /var/www/docker-volume/kotak/openalgo/keys:/app/keys                 # ← API keys/certificates
       - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
