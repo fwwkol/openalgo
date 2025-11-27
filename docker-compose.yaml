@@ -28,7 +28,7 @@ services:
 
 # Define named volumes for database and logs persistence
 volumes:
-  openalgo_beta_db:
+  kotak_openalgo_db:
     driver: local
-  openalgo_beta_logs:
+  kotak_openalgo_logs:
     driver: local
