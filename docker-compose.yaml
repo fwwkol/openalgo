@@ -14,9 +14,9 @@ services:
     volumes:
       - openalgo_db:/app/db
       - openalgo_logs:/app/logs          # Use named volume for logs
-      - /var/www/docker-volume/oalgo/log:/app/log                   # ← Application logs
-      - /var/www/docker-volume/oalgo/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
-      - /var/www/docker-volume/oalgo/keys:/app/keys                 # ← API keys/certificates
+      - /var/www/docker-volume/openalgo/log:/app/log                   # ← Application logs
+      - /var/www/docker-volume/openalgo/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
+      - /var/www/docker-volume/openalgo/keys:/app/keys                 # ← API keys/certificates
       - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
