@@ -40,6 +40,9 @@ from .ping import api as ping_ns
 from .telegram_bot import api as telegram_ns
 from .margin import api as margin_ns
 from .instruments import api as instruments_ns
+from .chart_api import api as chart_ns
+from .market_holidays import api as market_holidays_ns
+from .market_timings import api as market_timings_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -77,3 +80,6 @@ api.add_namespace(ping_ns, path='/ping')
 api.add_namespace(telegram_ns, path='/telegram')
 api.add_namespace(margin_ns, path='/margin')
 api.add_namespace(instruments_ns, path='/instruments')
+api.add_namespace(chart_ns, path='/chart')
+api.add_namespace(market_holidays_ns, path='/market/holidays')
+api.add_namespace(market_timings_ns, path='/market/timings')

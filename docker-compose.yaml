@@ -13,7 +13,7 @@ services:
     # persistent DB, logs + mount the host .env read-only so dotenv can read it
     volumes:
       - openalgo_db:/app/db
-      - openalgo_logs:/app/logs          # Use named volume for logs
+      - openalgo_logs:/app/logs                                        # Use named volume for logs
       - /var/www/docker-volume/openalgo/log:/app/log                   # ← Application logs
       - /var/www/docker-volume/openalgo/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
       - /var/www/docker-volume/openalgo/keys:/app/keys                 # ← API keys/certificates
@@ -31,4 +31,10 @@ volumes:
   openalgo_db:
     driver: local
   openalgo_logs:
+    driver: local
+  openalgo_log:
+    driver: local
+  openalgo_strategies:
+    driver: local
+  openalgo_keys:
     driver: local
