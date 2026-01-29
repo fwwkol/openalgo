@@ -13,10 +13,11 @@ services:
     # persistent DB, strategies, logs + mount the host .env read-only so dotenv can read it
     volumes:
       - openalgo_db:/app/db
-      - openalgo_log:/app/log            # Application logs (named volume)
-      - openalgo_strategies:/app/strategies  # Python strategies (named volume)
-      - openalgo_keys:/app/keys          # API keys/certificates (named volume)
-      - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
+      - /var/www/docker-volume/openalgo/log:/app/log                   # ← Application logs
+      - /var/www/docker-volume/openalgo/logs:/app/logs
+      - /var/www/docker-volume/openalgo/strategies:/app/strategies     # ← Python strategies (MAIN FIX)
+      - /var/www/docker-volume/openalgo/keys:/app/keys                 # ← API keys/certificates
+      - /var/www/docker-volume/openalgo/openalgo_tmp:/app/tmp          # Temporary directory for numba/scipy (named volume)
       - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
