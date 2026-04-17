@@ -5,6 +5,7 @@ import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
 import { Layout } from '@/components/layout/Layout'
 import { PageLoader } from '@/components/ui/page-loader'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { useBrokerStore } from '@/stores/brokerStore'
 
 // Lazy load all pages for code splitting
@@ -22,6 +23,7 @@ const NotFound = lazy(() => import('@/pages/NotFound'))
 // Broker auth
 const BrokerSelect = lazy(() => import('@/pages/BrokerSelect'))
 const BrokerTOTP = lazy(() => import('@/pages/BrokerTOTP'))
+const SamcoAuth = lazy(() => import('@/pages/SamcoAuth'))
 
 // Main pages
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
@@ -63,6 +65,8 @@ const VolSurface = lazy(() => import('@/pages/VolSurface'))
 const GEXDashboard = lazy(() => import('@/pages/GEXDashboard'))
 const IVSmile = lazy(() => import('@/pages/IVSmile'))
 const OIProfile = lazy(() => import('@/pages/OIProfile'))
+const StrategyBuilder = lazy(() => import('@/pages/StrategyBuilder'))
+const StrategyPortfolio = lazy(() => import('@/pages/StrategyPortfolio'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -130,10 +134,16 @@ const TrafficDashboard = lazy(() => import('@/pages/monitoring/TrafficDashboard'
 const LatencyDashboard = lazy(() => import('@/pages/monitoring/LatencyDashboard'))
 const HealthMonitor = lazy(() => import('@/pages/HealthMonitor'))
 
+function PageTitleUpdater() {
+  usePageTitle()
+  return null
+}
+
 function App() {
   return (
     <Providers>
       <BrowserRouter>
+        <PageTitleUpdater />
         <AuthSync>
           <Suspense fallback={<PageLoader />}>
             <Routes>
@@ -150,6 +160,7 @@ function App() {
               {/* Broker auth routes */}
               <Route path="/broker" element={<BrokerSelect />} />
               <Route path="/broker/:broker/totp" element={<BrokerTOTP />} />
+              <Route path="/broker/samco/auth" element={<SamcoAuth />} />
               {/* Dynamic broker TOTP routes for all supported brokers */}
               <Route path="/:broker/auth" element={<BrokerTOTP />} />
 
@@ -185,6 +196,8 @@ function App() {
                 <Route path="/gex" element={<GEXDashboard />} />
                 <Route path="/ivsmile" element={<IVSmile />} />
                 <Route path="/oiprofile" element={<OIProfile />} />
+                <Route path="/tools/strategy" element={<StrategyBuilder />} />
+                <Route path="/tools/strategy/portfolio" element={<StrategyPortfolio />} />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />

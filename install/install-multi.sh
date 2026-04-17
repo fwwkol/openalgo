@@ -50,7 +50,7 @@ generate_hex() {
 # Function to validate broker name
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
 
     if [[ ",$valid_brokers," == *",$broker,"* ]]; then
         return 0
@@ -210,6 +210,20 @@ sudo apt-get install -y python3 python3-venv python3-pip python3-full nginx git 
     libopenblas0 libgomp1 libgfortran5
 check_status "Failed to install packages"
 
+# Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
+# Kaleido 1.x ships no bundled browser; it drives a system Chromium via choreographer.
+# Debian has 'chromium' in main; Ubuntu 19.10+ renamed it to 'chromium-browser' (snap transitional).
+# Non-fatal — if nothing sticks we warn; the rest of openalgo still installs fine.
+log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
+if sudo apt-get install -y chromium fonts-liberation 2>/dev/null; then
+    log_message "Installed chromium (Debian package)" "$GREEN"
+elif sudo apt-get install -y chromium-browser fonts-liberation 2>/dev/null; then
+    log_message "Installed chromium-browser (Ubuntu transitional/snap)" "$GREEN"
+else
+    log_message "Chromium install failed - Telegram /chart will not render charts" "$YELLOW"
+    log_message "You can install it manually later: sudo snap install chromium" "$YELLOW"
+fi
+
 # Install uv
 log_message "\nInstalling uv package manager..." "$BLUE"
 sudo snap install astral-uv --classic
@@ -298,6 +312,7 @@ for ((i=1; i<=INSTANCES; i++)); do
     DB_PATH="sqlite:///db/openalgo${i}.db"
     LATENCY_DB="sqlite:///db/latency${i}.db"
     LOGS_DB="sqlite:///db/logs${i}.db"
+    HEALTH_DB="sqlite:///db/health${i}.db"
     SANDBOX_DB="sqlite:///db/sandbox${i}.db"
     HISTORIFY_DB="db/historify${i}.duckdb"
 
@@ -325,9 +340,9 @@ for ((i=1; i<=INSTANCES; i++)); do
     # 4. Update WebSocket URL for production (secure WebSocket through nginx)
     sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
 
-    # 5. Update host bindings to allow external connections
-    sudo sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" "$ENV_FILE"
-    sudo sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" "$ENV_FILE"
+    # 5. Host bindings intentionally left at 127.0.0.1 (the .sample.env default):
+    #    nginx on this host reverse-proxies /ws -> 127.0.0.1:WEBSOCKET_PORT, and
+    #    ZMQ is an internal message bus that must never be exposed publicly.
 
     # 6. Update API credentials
     sudo sed -i "s|YOUR_BROKER_API_KEY|$API_KEY|g" "$ENV_FILE"
@@ -337,10 +352,11 @@ for ((i=1; i<=INSTANCES; i++)); do
     sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
     sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" "$ENV_FILE"
 
-    # 8. Update database paths (unique per instance - ALL 5 databases)
+    # 8. Update database paths (unique per instance - ALL 6 databases)
     sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
     sudo sed -i "s|LATENCY_DATABASE_URL = '.*'|LATENCY_DATABASE_URL = '$LATENCY_DB'|g" "$ENV_FILE"
     sudo sed -i "s|LOGS_DATABASE_URL = '.*'|LOGS_DATABASE_URL = '$LOGS_DB'|g" "$ENV_FILE"
+    sudo sed -i "s|HEALTH_DATABASE_URL = '.*'|HEALTH_DATABASE_URL = '$HEALTH_DB'|g" "$ENV_FILE"
     sudo sed -i "s|SANDBOX_DATABASE_URL = '.*'|SANDBOX_DATABASE_URL = '$SANDBOX_DB'|g" "$ENV_FILE"
     sudo sed -i "s|HISTORIFY_DATABASE_URL = '.*'|HISTORIFY_DATABASE_URL = '$HISTORIFY_DB'|g" "$ENV_FILE"
 
@@ -521,6 +537,10 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory=$INSTANCE_DIR
+# Set HOME so Kaleido/choreographer can write temp files for Telegram /chart.
+# Kaleido 1.x creates temp dirs in Path.home() (not TMPDIR); the default
+# www-data home /var/www/ is typically root-owned and not writable.
+Environment="HOME=$INSTANCE_DIR/tmp"
 # Environment variables for numba/scipy support
 Environment="TMPDIR=$INSTANCE_DIR/tmp"
 Environment="NUMBA_CACHE_DIR=$INSTANCE_DIR/tmp/numba_cache"
