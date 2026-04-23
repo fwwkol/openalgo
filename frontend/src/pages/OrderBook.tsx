@@ -8,9 +8,12 @@ import {
   Settings2,
   X,
   XCircle,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { toast } from 'sonner'
+import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import { showToast } from '@/utils/toast'
 import { type QuotesData, tradingApi } from '@/api/trading'
 import {
   AlertDialog,
@@ -45,28 +48,67 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { cn, sanitizeCSV } from '@/lib/utils'
+import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 // Note: AlertDialog still used for Cancel All Orders
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    minimumFractionDigits: 2,
-  }).format(value)
+// Sort configuration types
+type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status';
+interface SortConfig {
+  key: SortKey;
+  direction: 'asc' | 'desc';
+}
+
+// Fixed: Defined outside component to prevent effect dependency churn and repeated socket re-subscriptions
+const ORDER_BOOK_EVENTS: OrderEventType[] = ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'];
+
+/**
+ * Helper to convert various broker timestamp formats into a sortable number.
+ * Ensures chronological accuracy for non-ISO formats.
+ */
+function parseTimestamp(timestamp: string): number {
+  if (!timestamp) return 0
+
+  let date = new Date(timestamp)
+
+  // If invalid, try "HH:MM:SS DD-MM-YYYY" (Flattrade/Shoonya/Zebu/Firstock norentm format)
+  if (Number.isNaN(date.getTime())) {
+    const norentm = timestamp.match(/^(\d{2}:\d{2}:\d{2})\s+(\d{2})-(\d{2})-(\d{4})$/)
+    if (norentm) {
+      date = new Date(`${norentm[4]}-${norentm[3]}-${norentm[2]}T${norentm[1]}`)
+    }
+  }
+
+  // If invalid, try "DD-MM-YYYY HH:MM:SS"
+  if (Number.isNaN(date.getTime())) {
+    const ddmmyyyy = timestamp.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}:\d{2}:\d{2})$/)
+    if (ddmmyyyy) {
+      date = new Date(`${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}T${ddmmyyyy[4]}`)
+    }
+  }
+
+  return date.getTime() || 0
 }
 
 function formatTime(timestamp: string): string {
-  try {
-    return new Date(timestamp).toLocaleTimeString('en-IN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
-  } catch {
-    return timestamp
+  if (!timestamp) return '-'
+
+  const timeValue = parseTimestamp(timestamp)
+  if (timeValue === 0) {
+     // Last resort: extract HH:MM:SS if embedded in the string
+    const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
+    return timeMatch ? timeMatch[1] : timestamp
   }
+
+  const date = new Date(timeValue)
+  return date.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; label: string }> = {
@@ -77,7 +119,9 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
 }
 
 export default function OrderBook() {
-  const { apiKey } = useAuthStore()
+  const { apiKey, user } = useAuthStore()
+  const { isCrypto } = useSupportedExchanges()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [orders, setOrders] = useState<Order[]>([])
   const [stats, setStats] = useState<OrderStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -87,6 +131,12 @@ export default function OrderBook() {
   // Filter state
   const [statusFilter, setStatusFilter] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Sort state - Default: most recent first
+  const [sortConfig, setSortConfig] = useState<SortConfig>({
+    key: 'timestamp',
+    direction: 'desc',
+  })
 
   // Modify order state
   const [modifyDialogOpen, setModifyDialogOpen] = useState(false)
@@ -101,11 +151,37 @@ export default function OrderBook() {
     product: 'MIS' as string,
   })
 
-  // Filter orders based on status
-  const filteredOrders = useMemo(() => {
-    if (statusFilter.length === 0) return orders
-    return orders.filter((order) => statusFilter.includes(order.order_status))
-  }, [orders, statusFilter])
+  // Filter and Sort orders
+  const sortedAndFilteredOrders = useMemo(() => {
+    // 1. Filter Logic
+    const filtered = statusFilter.length === 0 
+      ? orders 
+      : orders.filter((order) => statusFilter.includes(order.order_status))
+
+    // 2. Sort Logic
+    return [...filtered].sort((a, b) => {
+      const aValue = a[sortConfig.key]
+      const bValue = b[sortConfig.key]
+
+      if (sortConfig.key === 'timestamp') {
+        const aTime = parseTimestamp(aValue as string)
+        const bTime = parseTimestamp(bValue as string)
+        return sortConfig.direction === 'asc' ? aTime - bTime : bTime - aTime
+      }
+
+      // Standard string comparison for Symbol, Action, and Status
+      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1
+      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
+      return 0
+    })
+  }, [orders, statusFilter, sortConfig])
+
+  const requestSort = (key: SortKey) => {
+    setSortConfig((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+    }))
+  }
 
   const hasActiveFilters = statusFilter.length > 0
 
@@ -152,9 +228,12 @@ export default function OrderBook() {
 
   useEffect(() => {
     fetchOrders()
-    const interval = setInterval(() => fetchOrders(), 10000)
-    return () => clearInterval(interval)
   }, [fetchOrders])
+
+  // Refresh on order events instead of polling
+  useOrderEventRefresh(fetchOrders, {
+    events: ORDER_BOOK_EVENTS,
+  })
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -168,15 +247,15 @@ export default function OrderBook() {
     try {
       const response = await tradingApi.cancelOrder(orderid)
       if (response.status === 'success') {
-        toast.success(`Order cancelled: ${orderid}`)
+        showToast.success(`Order cancelled: ${orderid}`, 'orders')
         setTimeout(() => fetchOrders(true), 1000)
       } else {
-        toast.error(response.message || 'Failed to cancel order')
+        showToast.error(response.message || 'Failed to cancel order', 'orders')
       }
     } catch (error) {
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to cancel order'
-      toast.error(message)
+      showToast.error(message, 'orders')
     }
   }
 
@@ -184,18 +263,18 @@ export default function OrderBook() {
     try {
       const response = await tradingApi.cancelAllOrders()
       if (response.status === 'success') {
-        toast.success(response.message || 'All orders cancelled')
+        showToast.success(response.message || 'All orders cancelled', 'orders')
         // Delay refresh to allow broker to process cancellations
         setTimeout(() => fetchOrders(true), 2000)
       } else if (response.status === 'info') {
-        toast.info(response.message || 'No open orders to cancel')
+        showToast.info(response.message || 'No open orders to cancel', 'orders')
       } else {
-        toast.error(response.message || 'Failed to cancel all orders')
+        showToast.error(response.message || 'Failed to cancel all orders', 'orders')
       }
     } catch (error) {
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to cancel all orders'
-      toast.error(message)
+      showToast.error(message, 'orders')
     }
   }
 
@@ -242,54 +321,66 @@ export default function OrderBook() {
         trigger_price: modifyForm.trigger_price,
       })
       if (response.status === 'success') {
-        toast.success(`Order modified: ${modifyingOrder.orderid}`)
+        showToast.success(`Order modified: ${modifyingOrder.orderid}`, 'orders')
         setModifyDialogOpen(false)
         setTimeout(() => fetchOrders(true), 1000)
       } else {
-        toast.error(response.message || 'Failed to modify order')
+        showToast.error(response.message || 'Failed to modify order', 'orders')
       }
     } catch (error) {
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to modify order'
-      toast.error(message)
+      showToast.error(message, 'orders')
     }
   }
 
   const exportToCSV = () => {
-    const headers = [
-      'Symbol',
-      'Exchange',
-      'Action',
-      'Qty',
-      'Price',
-      'Trigger',
-      'Type',
-      'Product',
-      'Order ID',
-      'Status',
-      'Time',
-    ]
-    const rows = orders.map((o) => [
-      sanitizeCSV(o.symbol),
-      sanitizeCSV(o.exchange),
-      sanitizeCSV(o.action),
-      sanitizeCSV(o.quantity),
-      sanitizeCSV(o.price),
-      sanitizeCSV(o.trigger_price),
-      sanitizeCSV(o.pricetype),
-      sanitizeCSV(o.product),
-      sanitizeCSV(o.orderid),
-      sanitizeCSV(o.order_status),
-      sanitizeCSV(o.timestamp),
-    ])
+    if (sortedAndFilteredOrders.length === 0) {
+      showToast.error('No data to export', 'system')
+      return
+    }
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `orderbook_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
+    try {
+      const headers = [
+        'Symbol',
+        'Exchange',
+        'Action',
+        'Qty',
+        'Price',
+        'Trigger',
+        'Type',
+        ...(isCrypto ? [] : ['Product']),
+        'Order ID',
+        'Status',
+        'Time',
+      ]
+      const rows = sortedAndFilteredOrders.map((o) => [
+        sanitizeCSV(o.symbol),
+        sanitizeCSV(o.exchange),
+        sanitizeCSV(o.action),
+        sanitizeCSV(o.quantity),
+        sanitizeCSV(o.price),
+        sanitizeCSV(o.trigger_price),
+        sanitizeCSV(o.pricetype),
+        ...(isCrypto ? [] : [sanitizeCSV(o.product)]),
+        sanitizeCSV(o.orderid),
+        sanitizeCSV(o.order_status),
+        sanitizeCSV(o.timestamp),
+      ])
+
+      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `orderbook_${new Date().toISOString().split('T')[0]}.csv`
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
   }
 
   const openOrders = orders.filter((o) => o.order_status === 'open')
@@ -472,7 +563,7 @@ export default function OrderBook() {
             </div>
           ) : error ? (
             <div className="text-center py-12 text-muted-foreground">{error}</div>
-          ) : filteredOrders.length === 0 ? (
+          ) : sortedAndFilteredOrders.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               {hasActiveFilters ? (
                 <div>
@@ -490,23 +581,63 @@ export default function OrderBook() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[120px]">Symbol</TableHead>
+                    <TableHead 
+                      className="w-[120px] cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => requestSort('symbol')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Symbol
+                        {sortConfig.key === 'symbol' && (
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        )}
+                      </div>
+                    </TableHead>
                     <TableHead className="w-[80px]">Exchange</TableHead>
-                    <TableHead className="w-[70px]">Action</TableHead>
+                    <TableHead 
+                      className="w-[70px] cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => requestSort('action')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Action
+                        {sortConfig.key === 'action' && (
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        )}
+                      </div>
+                    </TableHead>
                     <TableHead className="w-[70px] text-right">Qty</TableHead>
                     <TableHead className="w-[100px] text-right">Price</TableHead>
                     <TableHead className="w-[100px] text-right">Trigger</TableHead>
                     <TableHead className="w-[80px]">Type</TableHead>
-                    <TableHead className="w-[70px]">Product</TableHead>
+                    {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
                     <TableHead className="w-[140px]">Order ID</TableHead>
-                    <TableHead className="w-[100px]">Status</TableHead>
-                    <TableHead className="w-[100px]">Time</TableHead>
+                    <TableHead 
+                      className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => requestSort('order_status')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Status
+                        {sortConfig.key === 'order_status' && (
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        )}
+                      </div>
+                    </TableHead>
+                    <TableHead 
+                      className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => requestSort('timestamp')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Time
+                        {sortConfig.key === 'timestamp' && (
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        )}
+                      </div>
+                    </TableHead>
                     <TableHead className="w-[60px]">Cancel</TableHead>
                     <TableHead className="w-[60px]">Modify</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredOrders.map((order, index) => {
+                  {sortedAndFilteredOrders.map((order, index) => {
                     const status = statusConfig[order.order_status] || statusConfig.open
                     const StatusIcon = status.icon
                     const canCancel = order.order_status === 'open'
@@ -535,9 +666,11 @@ export default function OrderBook() {
                         <TableCell>
                           <Badge variant="secondary">{order.pricetype}</Badge>
                         </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{order.product}</Badge>
-                        </TableCell>
+                        {!isCrypto && (
+                          <TableCell>
+                            <Badge variant="outline">{order.product}</Badge>
+                          </TableCell>
+                        )}
                         <TableCell className="font-mono text-xs">{order.orderid}</TableCell>
                         <TableCell>
                           <div className={cn('flex items-center gap-1', status.color)}>
@@ -555,6 +688,7 @@ export default function OrderBook() {
                               size="icon"
                               className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
                               onClick={() => handleCancelOrder(order.orderid)}
+                              aria-label={`Cancel order ${order.orderid}`}
                             >
                               <X className="h-4 w-4" />
                             </Button>
@@ -567,6 +701,7 @@ export default function OrderBook() {
                               size="icon"
                               className="h-8 w-8 text-blue-500 hover:text-blue-600"
                               onClick={() => openModifyDialog(order)}
+                              aria-label={`Modify order for ${order.symbol}`}
                             >
                               <Pencil className="h-4 w-4" />
                             </Button>
@@ -617,12 +752,14 @@ export default function OrderBook() {
                   {modifyForm.pricetype}
                 </Badge>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Product:</span>
-                <Badge variant="outline" className="text-xs">
-                  {modifyForm.product}
-                </Badge>
-              </div>
+              {!isCrypto && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Product:</span>
+                  <Badge variant="outline" className="text-xs">
+                    {modifyForm.product}
+                  </Badge>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Qty:</span>
                 <span className="font-mono text-sm font-medium">{modifyForm.quantity}</span>

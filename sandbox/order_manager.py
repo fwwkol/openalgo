@@ -27,22 +27,9 @@ from database.symbol import SymToken
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
 from utils.logging import get_logger
+from utils.symbol_utils import is_future, is_option
 
 logger = get_logger(__name__)
-
-
-def is_option(symbol, exchange):
-    """Check if symbol is an option based on exchange and symbol suffix"""
-    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
-        return symbol.endswith("CE") or symbol.endswith("PE")
-    return False
-
-
-def is_future(symbol, exchange):
-    """Check if symbol is a future based on exchange and symbol suffix"""
-    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
-        return symbol.endswith("FUT")
-    return False
 
 
 class OrderManager:
@@ -52,7 +39,7 @@ class OrderManager:
         self.user_id = user_id
         self.fund_manager = FundManager(user_id)
 
-    def place_order(self, order_data):
+    def place_order(self, order_data, prefetched_quote=None):
         """
         Place a new order in sandbox mode
 
@@ -67,6 +54,8 @@ class OrderManager:
                 - price_type: str (MARKET/LIMIT/SL/SL-M)
                 - product: str (CNC/NRML/MIS)
                 - strategy: str (optional)
+            prefetched_quote: dict (optional) pre-fetched quote from multiquotes
+                batch call, avoids per-order REST API calls in basket orders
 
         Returns:
             tuple: (success: bool, response: dict, status_code: int)
@@ -79,7 +68,7 @@ class OrderManager:
 
             # Extract order parameters
             symbol = order_data["symbol"]
-            exchange = order_data["exchange"]
+            exchange = order_data["exchange"].upper()
             action = order_data["action"].upper()
             quantity = int(order_data["quantity"])
             price = Decimal(str(order_data.get("price", 0))) if order_data.get("price") else None
@@ -106,7 +95,7 @@ class OrderManager:
                 )
 
             # Validate lot size for F&O
-            if exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]:
+            if exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]:
                 lot_size = symbol_obj.lotsize or 1
                 if quantity % lot_size != 0:
                     return (
@@ -243,27 +232,42 @@ class OrderManager:
                 # We need a valid price - reject order if unavailable (no hardcoded fallback)
                 quote_fetch_success = False
 
-                # Attempt 1: Fetch live quote with retry
-                for attempt in range(3):
+                # Attempt 0: Use pre-fetched quote from batch call (basket orders)
+                if prefetched_quote and prefetched_quote.get("ltp"):
                     try:
-                        from sandbox.execution_engine import ExecutionEngine
-
-                        engine = ExecutionEngine()
-                        quote = engine._fetch_quote(symbol, exchange)
-                        if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
-                            margin_calculation_price = Decimal(str(quote["ltp"]))
-                            cached_quote = quote  # Cache for immediate execution
+                        ltp_val = Decimal(str(prefetched_quote["ltp"]))
+                        if ltp_val > 0:
+                            margin_calculation_price = ltp_val
+                            cached_quote = prefetched_quote
                             logger.debug(
-                                f"Using LTP {margin_calculation_price} for MARKET order margin calculation"
+                                f"Using pre-fetched LTP {margin_calculation_price} for MARKET order margin calculation"
                             )
                             quote_fetch_success = True
-                            break
                     except Exception as e:
-                        logger.debug(f"Quote fetch attempt {attempt + 1} failed: {e}")
+                        logger.debug(f"Pre-fetched quote unusable: {e}")
 
-                    # Wait before retry (0.3s, 0.6s, 0.9s)
-                    if attempt < 2:
-                        time.sleep(0.3 * (attempt + 1))
+                # Attempt 1: Fetch live quote with retry
+                if not quote_fetch_success:
+                    for attempt in range(3):
+                        try:
+                            from sandbox.execution_engine import ExecutionEngine
+
+                            engine = ExecutionEngine()
+                            quote = engine._fetch_quote(symbol, exchange)
+                            if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
+                                margin_calculation_price = Decimal(str(quote["ltp"]))
+                                cached_quote = quote  # Cache for immediate execution
+                                logger.debug(
+                                    f"Using LTP {margin_calculation_price} for MARKET order margin calculation"
+                                )
+                                quote_fetch_success = True
+                                break
+                        except Exception as e:
+                            logger.debug(f"Quote fetch attempt {attempt + 1} failed: {e}")
+
+                        # Wait before retry (0.3s, 0.6s, 0.9s)
+                        if attempt < 2:
+                            time.sleep(0.3 * (attempt + 1))
 
                 # Attempt 2: Use position's last known LTP as fallback
                 if not quote_fetch_success:
@@ -298,6 +302,49 @@ class OrderManager:
                 margin_calculation_price = price
                 logger.debug(f"Using LIMIT price {margin_calculation_price} for margin calculation")
 
+                # Fetch current LTP to check if this LIMIT order is marketable
+                # Marketable = can be executed immediately at market price
+                # Use pre-fetched quote if available, otherwise REST API with retry
+                marketability_checked = False
+
+                if prefetched_quote and prefetched_quote.get("ltp"):
+                    try:
+                        current_ltp = Decimal(str(prefetched_quote["ltp"]))
+                        if current_ltp > 0:
+                            if (action == "BUY" and current_ltp <= price) or (
+                                action == "SELL" and current_ltp >= price
+                            ):
+                                cached_quote = prefetched_quote
+                                logger.info(
+                                    f"LIMIT order is marketable (pre-fetched): {action} limit={price}, LTP={current_ltp}"
+                                )
+                            marketability_checked = True
+                    except Exception as e:
+                        logger.debug(f"Pre-fetched marketability check failed: {e}")
+
+                if not marketability_checked:
+                    for attempt in range(3):
+                        try:
+                            from sandbox.execution_engine import ExecutionEngine
+
+                            engine = ExecutionEngine()
+                            quote = engine._fetch_quote(symbol, exchange)
+                            if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
+                                current_ltp = Decimal(str(quote["ltp"]))
+                                if (action == "BUY" and current_ltp <= price) or (
+                                    action == "SELL" and current_ltp >= price
+                                ):
+                                    cached_quote = quote
+                                    logger.info(
+                                        f"LIMIT order is marketable: {action} limit={price}, LTP={current_ltp}"
+                                    )
+                                break
+                        except Exception as e:
+                            logger.debug(f"Marketability check attempt {attempt + 1} failed: {e}")
+
+                        if attempt < 2:
+                            time.sleep(0.3 * (attempt + 1))
+
             elif price_type in ["SL", "SL-M"]:
                 # For SL/SL-M orders, use trigger price for margin calculation
                 # This represents the worst-case price at which order will be triggered
@@ -305,6 +352,76 @@ class OrderManager:
                 logger.debug(
                     f"Using trigger price {margin_calculation_price} for {price_type} order margin calculation"
                 )
+
+                # Fetch current LTP to check if trigger is already met
+                # If so, execute immediately instead of waiting for next tick
+                # Use pre-fetched quote if available, otherwise REST API with retry
+                trigger_checked = False
+
+                if prefetched_quote and prefetched_quote.get("ltp"):
+                    try:
+                        current_ltp = Decimal(str(prefetched_quote["ltp"]))
+                        if current_ltp > 0:
+                            trigger_met = False
+                            if action == "BUY" and current_ltp >= trigger_price:
+                                trigger_met = True
+                            elif action == "SELL" and current_ltp <= trigger_price:
+                                trigger_met = True
+
+                            if trigger_met:
+                                if price_type == "SL-M":
+                                    cached_quote = prefetched_quote
+                                    logger.info(
+                                        f"SL-M trigger already met (pre-fetched): {action} trigger={trigger_price}, LTP={current_ltp}"
+                                    )
+                                elif price_type == "SL":
+                                    if (action == "BUY" and current_ltp <= price) or (
+                                        action == "SELL" and current_ltp >= price
+                                    ):
+                                        cached_quote = prefetched_quote
+                                        logger.info(
+                                            f"SL trigger+limit already met (pre-fetched): {action} trigger={trigger_price}, limit={price}, LTP={current_ltp}"
+                                        )
+                            trigger_checked = True
+                    except Exception as e:
+                        logger.debug(f"Pre-fetched SL trigger check failed: {e}")
+
+                if not trigger_checked:
+                    for attempt in range(3):
+                        try:
+                            from sandbox.execution_engine import ExecutionEngine
+
+                            engine = ExecutionEngine()
+                            quote = engine._fetch_quote(symbol, exchange)
+                            if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
+                                current_ltp = Decimal(str(quote["ltp"]))
+                                trigger_met = False
+
+                                if action == "BUY" and current_ltp >= trigger_price:
+                                    trigger_met = True
+                                elif action == "SELL" and current_ltp <= trigger_price:
+                                    trigger_met = True
+
+                                if trigger_met:
+                                    if price_type == "SL-M":
+                                        cached_quote = quote
+                                        logger.info(
+                                            f"SL-M order trigger already met: {action} trigger={trigger_price}, LTP={current_ltp}"
+                                        )
+                                    elif price_type == "SL":
+                                        if (action == "BUY" and current_ltp <= price) or (
+                                            action == "SELL" and current_ltp >= price
+                                        ):
+                                            cached_quote = quote
+                                            logger.info(
+                                                f"SL order trigger+limit already met: {action} trigger={trigger_price}, limit={price}, LTP={current_ltp}"
+                                            )
+                                break
+                        except Exception as e:
+                            logger.debug(f"SL trigger check attempt {attempt + 1} failed: {e}")
+
+                        if attempt < 2:
+                            time.sleep(0.3 * (attempt + 1))
 
             # Validate that we have a valid price for margin calculation
             if not margin_calculation_price or margin_calculation_price <= 0:
@@ -503,25 +620,74 @@ class OrderManager:
 
             logger.info(f"Order placed: {orderid} - {symbol} {action} {quantity} @ {price_type}")
 
-            # Execute MARKET orders immediately using cached quote (no re-fetch needed)
-            if price_type == "MARKET":
+            # Execute orders immediately when conditions are already met
+            # MARKET: always immediate, LIMIT: if marketable, SL/SL-M: if trigger already met
+            # This must happen BEFORE notifying the WebSocket engine to prevent
+            # duplicate execution (WebSocket tick arriving before immediate execution completes)
+            if price_type == "MARKET" or (cached_quote and price_type in ["LIMIT", "SL", "SL-M"]):
                 try:
                     from sandbox.execution_engine import ExecutionEngine
 
-                    engine = ExecutionEngine()
+                    exec_engine = ExecutionEngine()
 
-                    # Use cached quote from margin calculation (already fetched above)
+                    # Use cached quote from earlier check (already fetched above)
                     if cached_quote:
-                        # Process the order immediately with cached quote
-                        engine._process_order(order, cached_quote)
-                        logger.info(f"Market order {orderid} executed immediately")
+                        ltp = Decimal(str(cached_quote.get("ltp", 0)))
+
+                        if price_type == "LIMIT":
+                            # Marketable LIMIT: fill at LTP (market price), not limit price
+                            # In real exchanges, a marketable limit order gets price improvement
+                            # e.g., BUY LIMIT 1500, LTP 1417 → fills at 1417
+                            if ltp > 0:
+                                exec_engine._execute_order(order, ltp)
+                                logger.info(
+                                    f"Marketable limit order {orderid} executed at LTP {ltp} (limit was {price})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"Invalid LTP in cached quote for {symbol}, order remains open"
+                                )
+                        elif price_type in ["SL", "SL-M"]:
+                            # SL/SL-M with trigger already met: execute at LTP
+                            if ltp > 0:
+                                exec_engine._execute_order(order, ltp)
+                                logger.info(
+                                    f"{price_type} order {orderid} executed at LTP {ltp} (trigger already met)"
+                                )
+                            else:
+                                logger.warning(
+                                    f"Invalid LTP in cached quote for {symbol}, order remains open"
+                                )
+                        else:
+                            # MARKET order: process normally (fills at bid/ask or LTP)
+                            exec_engine._process_order(order, cached_quote)
+                            logger.info(
+                                f"Market order {orderid} executed immediately"
+                            )
                     else:
                         logger.warning(
                             f"Could not fetch quote for {symbol} on {exchange}, order remains open"
                         )
                 except Exception as e:
-                    logger.exception(f"Error executing market order immediately: {e}")
+                    logger.exception(f"Error executing order immediately: {e}")
                     # Order remains in 'open' status if execution fails
+
+            # Only notify WebSocket execution engine for orders that are STILL open
+            # (not already executed immediately above). This prevents the WebSocket
+            # engine from re-executing an already completed order.
+            db_session.refresh(order)
+            if order.order_status == "open":
+                try:
+                    from sandbox.websocket_execution_engine import (
+                        get_websocket_execution_engine,
+                        is_websocket_execution_engine_running,
+                    )
+
+                    if is_websocket_execution_engine_running():
+                        ws_engine = get_websocket_execution_engine()
+                        ws_engine.notify_order_placed(order)
+                except Exception as e:
+                    logger.debug(f"WebSocket execution engine notification skipped: {e}")
 
             return True, {"status": "success", "orderid": orderid, "mode": "analyze"}, 200
 
@@ -572,7 +738,7 @@ class OrderManager:
                 new_quantity = int(new_data["quantity"])
                 # Validate lot size (from cache)
                 symbol_obj = get_symbol_info(order.symbol, order.exchange)
-                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]:
+                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]:
                     lot_size = symbol_obj.lotsize or 1
                     if new_quantity % lot_size != 0:
                         return (
@@ -933,7 +1099,7 @@ class OrderManager:
                 )
 
         # Derivatives exchanges (F&O, Commodity, Currency): Only NRML and MIS allowed
-        if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
+        if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "CRYPTO"]:
             if product == "CNC":
                 return (
                     False,
@@ -971,7 +1137,7 @@ class OrderManager:
                 return False, "Invalid trigger_price"
 
         # Validate exchange
-        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]
+        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]
         if order_data["exchange"].upper() not in valid_exchanges:
             return False, f"Invalid exchange. Must be one of {', '.join(valid_exchanges)}"
 

@@ -603,6 +603,28 @@ def close_position():
                 "orderid": orderid,
             }
             status_code = 200
+
+            # Publish event for logging, socketio, and telegram (fixes missing API log)
+            api_key = get_api_key_for_tradingview(login_username)
+            if api_key:
+                from events import PositionClosedEvent
+                from utils.event_bus import bus
+
+                log_request = order_data.copy()
+                log_request["api_type"] = "closeposition"
+
+                bus.publish(PositionClosedEvent(
+                    mode="live",
+                    api_type="closeposition",
+                    symbol=symbol,
+                    exchange=exchange,
+                    product=product,
+                    orderid=str(orderid),
+                    message="Position close order placed successfully.",
+                    request_data=log_request,
+                    response_data=response_data,
+                    api_key=api_key,
+                ))
         else:
             # No orderid, definite error
             response_data = {

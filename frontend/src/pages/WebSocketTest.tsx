@@ -22,8 +22,9 @@ import {
   Zap,
   ZapOff,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,7 +36,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { cn } from '@/lib/utils'
+import { cn, makeFormatCurrency } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', { credentials: 'include' })
@@ -80,7 +82,7 @@ interface LogEntry {
   type: 'info' | 'success' | 'error' | 'data' | 'warn'
 }
 
-const EXCHANGES = ['NSE', 'NFO', 'BSE', 'BFO', 'CDS', 'MCX']
+// EXCHANGES is now dynamic — provided by useSupportedExchanges() hook
 
 function formatPrice(price: number): string {
   return new Intl.NumberFormat('en-IN', {
@@ -214,8 +216,16 @@ function DepthLevel({
   )
 }
 
-export default function WebSocketTest() {
-  // Connection state
+interface WebSocketTestProps {
+  depthLevel?: number
+}
+
+export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
+  const { user } = useAuthStore()
+  const { tradingExchanges } = useSupportedExchanges()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  // Connection state - INDEPENDENT WebSocket (not shared with MarketDataManager)
+  // This page needs its own connection for testing/debugging purposes
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -373,7 +383,10 @@ export default function WebSocketTest() {
           break
 
         case 'market_data': {
-          const symbol = (data.symbol as string).toUpperCase()
+          // Normalize symbol by removing :50/:30/:20 suffix for matching
+          let symbol = (data.symbol as string).toUpperCase()
+          // Strip depth level suffix (e.g., RELIANCE:50 -> RELIANCE)
+          symbol = symbol.replace(/:(?:50|30|20)$/, '')
           const exchange = data.exchange as string
           const mode = data.mode as number
           const marketData = (data.data || {}) as MarketData
@@ -432,17 +445,23 @@ export default function WebSocketTest() {
   // Subscription controls
   const subscribe = (symbol: string, exchange: string, mode: string) => {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-      toast.error('Not connected')
+      showToast.error('Not connected')
       return
     }
 
-    socketRef.current.send(
-      JSON.stringify({
-        action: 'subscribe',
-        symbols: [{ symbol, exchange }],
-        mode,
-      })
-    )
+    // Build subscription message
+    const subscribeMessage: Record<string, unknown> = {
+      action: 'subscribe',
+      symbols: [{ symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol, exchange }],
+      mode,
+    }
+
+    // Add depth level for Depth mode
+    if (mode === 'Depth' && depthLevel > 5) {
+      subscribeMessage.depth = depthLevel
+    }
+
+    socketRef.current.send(JSON.stringify(subscribeMessage))
 
     setActiveSymbols((prev) => {
       const key = `${exchange}:${symbol}`
@@ -462,13 +481,18 @@ export default function WebSocketTest() {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return
 
     const modeMap: Record<string, number> = { LTP: 1, Quote: 2, Depth: 3 }
-    socketRef.current.send(
-      JSON.stringify({
-        action: 'unsubscribe',
-        symbols: [{ symbol, exchange, mode: modeMap[mode] }],
-        mode,
-      })
-    )
+    const unsubscribeMessage: Record<string, unknown> = {
+      action: 'unsubscribe',
+      symbols: [{ symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol, exchange, mode: modeMap[mode] }],
+      mode,
+    }
+
+    // Add depth level for Depth mode
+    if (mode === 'Depth' && depthLevel > 5) {
+      unsubscribeMessage.depth = depthLevel
+    }
+
+    socketRef.current.send(JSON.stringify(unsubscribeMessage))
 
     setActiveSymbols((prev) => {
       const key = `${exchange}:${symbol}`
@@ -484,7 +508,7 @@ export default function WebSocketTest() {
 
   const subscribeAll = (mode: string) => {
     if (activeSymbols.size === 0) {
-      toast.error('Add symbols first')
+      showToast.error('Add symbols first')
       return
     }
     activeSymbols.forEach((_, key) => {
@@ -522,7 +546,6 @@ export default function WebSocketTest() {
       setSearchResults((data.results || []).slice(0, 8))
       setShowSearchResults(true)
     } catch (err) {
-      console.debug('Symbol search failed:', err)
       setSearchResults([])
     } finally {
       setIsSearching(false)
@@ -540,7 +563,7 @@ export default function WebSocketTest() {
   const addSymbol = (symbol: string, exchange: string) => {
     const key = `${exchange}:${symbol}`
     if (activeSymbols.has(key)) {
-      toast.error('Already added')
+      showToast.error('Already added')
       return
     }
     setActiveSymbols((prev) =>
@@ -618,7 +641,6 @@ export default function WebSocketTest() {
         })
         setActiveSymbols(newMap)
       } catch (err) {
-        console.debug('Failed to load saved symbols:', err)
       }
     }
   }, [])
@@ -667,11 +689,13 @@ export default function WebSocketTest() {
                       variant="outline"
                       className="text-[9px] border-cyan-500/30 text-cyan-400 font-mono"
                     >
-                      TEST
+                      {depthLevel > 5 ? `DEPTH ${depthLevel}` : 'TEST'}
                     </Badge>
                   </h1>
                   <p className="text-xs text-muted-foreground">
-                    Real-time market data testing interface
+                    {depthLevel > 5
+                      ? `${depthLevel}-level market depth testing (broker dependent)`
+                      : 'Real-time market data testing interface (independent connection)'}
                   </p>
                 </div>
               </div>
@@ -817,9 +841,9 @@ export default function WebSocketTest() {
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border">
                   <SelectItem value="_all">All Exchanges</SelectItem>
-                  {EXCHANGES.map((ex) => (
-                    <SelectItem key={ex} value={ex}>
-                      {ex}
+                  {tradingExchanges.map((ex) => (
+                    <SelectItem key={ex.value} value={ex.value}>
+                      {ex.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -882,7 +906,7 @@ export default function WebSocketTest() {
                 size="sm"
                 className="border-violet-500/30 text-violet-400 hover:bg-violet-500/10 disabled:opacity-30"
               >
-                <Layers className="w-3.5 h-3.5 mr-1.5" /> Depth All
+                <Layers className="w-3.5 h-3.5 mr-1.5" /> Depth {depthLevel > 5 ? depthLevel : ''} All
               </Button>
               <Button
                 onClick={unsubscribeAll}
@@ -950,6 +974,7 @@ export default function WebSocketTest() {
                     <div className="flex gap-1">
                       {(['LTP', 'Quote', 'Depth'] as const).map((mode) => {
                         const isActive = symbolData.subscriptions.has(mode)
+                        const displayLabel = mode === 'Depth' && depthLevel > 5 ? `D${depthLevel}` : mode
                         return (
                           <button
                             type="button"
@@ -966,7 +991,7 @@ export default function WebSocketTest() {
                                 : 'bg-muted/50 text-muted-foreground border border-border/50 hover:text-foreground'
                             )}
                           >
-                            {mode}
+                            {displayLabel}
                           </button>
                         )
                       })}
@@ -982,7 +1007,7 @@ export default function WebSocketTest() {
                           LTP
                         </div>
                         <div className="text-3xl font-bold font-mono tracking-tight">
-                          {hasLtp ? `₹${formatPrice(symbolData.data.ltp!)}` : '---'}
+                          {hasLtp ? formatCurrency(symbolData.data.ltp!) : '---'}
                         </div>
                       </div>
                       {hasLtp && (
@@ -1055,12 +1080,12 @@ export default function WebSocketTest() {
                         </button>
 
                         {isDepthExpanded && (
-                          <div className="grid grid-cols-2 gap-4 p-3 bg-muted/30 rounded-lg border border-border/40">
+                          <div className="grid grid-cols-2 gap-4 p-3 bg-muted/30 rounded-lg border border-border/40 max-h-[400px] overflow-y-auto">
                             <div>
-                              <div className="text-[9px] uppercase tracking-wider text-emerald-400 mb-2 flex items-center gap-1">
+                              <div className="text-[9px] uppercase tracking-wider text-emerald-400 mb-2 flex items-center gap-1 sticky top-0 bg-muted/30 py-1">
                                 <ArrowUp className="w-3 h-3" /> Bids
                               </div>
-                              {symbolData.data.depth.buy.slice(0, 5).map((level, i) => (
+                              {symbolData.data.depth.buy.slice(0, depthLevel).map((level, i) => (
                                 <DepthLevel
                                   key={i}
                                   price={level.price}
@@ -1074,10 +1099,10 @@ export default function WebSocketTest() {
                               ))}
                             </div>
                             <div>
-                              <div className="text-[9px] uppercase tracking-wider text-rose-400 mb-2 flex items-center gap-1">
+                              <div className="text-[9px] uppercase tracking-wider text-rose-400 mb-2 flex items-center gap-1 sticky top-0 bg-muted/30 py-1">
                                 <ArrowDown className="w-3 h-3" /> Asks
                               </div>
-                              {symbolData.data.depth.sell.slice(0, 5).map((level, i) => (
+                              {symbolData.data.depth.sell.slice(0, depthLevel).map((level, i) => (
                                 <DepthLevel
                                   key={i}
                                   price={level.price}

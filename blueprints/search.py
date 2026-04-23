@@ -6,15 +6,13 @@ from database.symbol import enhanced_search_symbols
 from database.token_db_enhanced import fno_search_symbols
 from database.token_db_enhanced import get_distinct_expiries_cached as get_distinct_expiries
 from database.token_db_enhanced import get_distinct_underlyings_cached as get_distinct_underlyings
+from utils.constants import FNO_EXCHANGES
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
 
 search_bp = Blueprint("search_bp", __name__, url_prefix="/search")
-
-# FNO exchanges that support advanced filters
-FNO_EXCHANGES = ["NFO", "BFO", "MCX", "CDS"]
 
 
 @search_bp.route("/token")
@@ -86,6 +84,7 @@ def search():
                 "expiry": result.expiry,
                 "strike": result.strike,
                 "lotsize": result.lotsize,
+                "contract_value": result.contract_value,
                 "instrumenttype": result.instrumenttype,
                 "tick_size": result.tick_size,
                 "freeze_qty": get_freeze_qty_for_option(result.symbol, result.exchange),
@@ -155,6 +154,7 @@ def api_search():
                 "expiry": r["expiry"],
                 "strike": r["strike"],
                 "lotsize": r.get("lotsize"),
+                "contract_value": r.get("contract_value"),
                 "instrumenttype": r["instrumenttype"],
                 "freeze_qty": r.get("freeze_qty", 1),
             }
@@ -178,6 +178,7 @@ def api_search():
                 "expiry": result.expiry,
                 "strike": result.strike,
                 "lotsize": result.lotsize,
+                "contract_value": result.contract_value,
                 "instrumenttype": result.instrumenttype,
                 "freeze_qty": get_freeze_qty_for_option(result.symbol, result.exchange),
             }
@@ -209,5 +210,8 @@ def api_underlyings():
 
     logger.debug(f"Fetching underlyings: exchange={exchange}")
     underlyings = get_distinct_underlyings(exchange=exchange)
+
+    # Filter out exchange test symbols (e.g. 011NSETEST, 021BSETEST)
+    underlyings = [u for u in underlyings if "NSETEST" not in u and "BSETEST" not in u]
 
     return jsonify({"status": "success", "underlyings": underlyings})

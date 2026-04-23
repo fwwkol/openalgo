@@ -4,7 +4,7 @@
 import { useCallback, useRef, useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -61,6 +61,7 @@ import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 
 // Import Flow components
 import { nodeTypes } from '@/components/flow/nodes'
@@ -97,6 +98,7 @@ function FlowEditorContent() {
   } = useFlowWorkflowStore()
 
   const [isActive, setIsActive] = useState(false)
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showLogPanel, setShowLogPanel] = useState(false)
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([])
   const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle')
@@ -111,7 +113,7 @@ function FlowEditorContent() {
       logout()
       navigate('/login')
     } catch (error) {
-      toast.error('Logout failed')
+      showToast.error('Logout failed', 'system')
     }
   }
 
@@ -173,10 +175,10 @@ function FlowEditorContent() {
     onSuccess: () => {
       markSaved()
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
-      toast.success('Workflow saved')
+      showToast.success('Workflow saved', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -185,10 +187,10 @@ function FlowEditorContent() {
     onSuccess: () => {
       setIsActive(true)
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflow(Number(id)) })
-      toast.success('Workflow activated')
+      showToast.success('Workflow activated', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -197,10 +199,10 @@ function FlowEditorContent() {
     onSuccess: () => {
       setIsActive(false)
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflow(Number(id)) })
-      toast.success('Workflow deactivated')
+      showToast.success('Workflow deactivated', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -217,15 +219,15 @@ function FlowEditorContent() {
         setExecutionLogs(data.logs as LogEntry[])
       }
       if (data.status === 'success') {
-        toast.success(data.message || 'Execution completed')
+        showToast.success(data.message || 'Execution completed', 'flow')
       } else {
-        toast.error(data.message || 'Execution failed')
+        showToast.error(data.message || 'Execution failed', 'flow')
       }
     },
     onError: (error: Error) => {
       setExecutionStatus('error')
       setExecutionLogs([{ time: new Date().toISOString(), message: error.message, level: 'error' }])
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -338,9 +340,9 @@ function FlowEditorContent() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
-      toast.success('Workflow exported')
+      showToast.success('Workflow exported', 'flow')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Export failed')
+      showToast.error(error instanceof Error ? error.message : 'Export failed', 'flow')
     }
   }, [id])
 
@@ -489,7 +491,7 @@ function FlowEditorContent() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleLogout}
+                onClick={() => setShowLogoutDialog(true)}
                 className="text-destructive focus:text-destructive"
               >
                 <LogOut className="h-4 w-4 mr-2" />
@@ -499,6 +501,12 @@ function FlowEditorContent() {
           </DropdownMenu>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
 
       {/* Workflow Toolbar */}
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">

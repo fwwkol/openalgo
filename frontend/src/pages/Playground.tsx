@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { toast } from "sonner";
+import { showToast } from "@/utils/toast";
 import { authApi } from "@/api/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,7 @@ import { profileMenuItems } from "@/config/navigation";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
 import { useThemeStore } from "@/stores/themeStore";
+import { LogoutConfirmDialog } from "@/components/auth/LogoutConfirmDialog";
 import { JsonEditor } from "@/components/ui/json-editor";
 import { WebSocketTesterPanel } from "@/components/playground/WebSocketTesterPanel";
 
@@ -183,7 +184,7 @@ export default function Playground() {
       await authApi.logout();
       logout();
       navigate("/login");
-      toast.success("Logged out successfully");
+      showToast.success("Logged out successfully", 'analyzer');
     } catch {
       logout();
       navigate("/login");
@@ -192,6 +193,7 @@ export default function Playground() {
 
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [endpoints, setEndpoints] = useState<EndpointsByCategory>({});
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
     new Set(['data', 'utilities', 'websocket']),
@@ -220,9 +222,26 @@ export default function Playground() {
   // Mobile sidebar
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
+  // Host server URL for display
+  const [hostServer, setHostServer] = useState(window.location.origin);
+
   // Playground mode - REST API or WebSocket
   const [playgroundMode, setPlaygroundMode] = useState<"rest" | "websocket">("rest");
   const [wsInitialMessage, setWsInitialMessage] = useState<string>("");
+
+  useEffect(() => {
+    // Fetch host server config
+    fetch("/api/config/host", { credentials: "include" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.host_server) {
+          setHostServer(data.host_server);
+        }
+      })
+      .catch(() => {
+        // Fallback to window.location.origin (already set as default)
+      });
+  }, []);
 
   useEffect(() => {
     loadApiKey();
@@ -254,7 +273,7 @@ export default function Playground() {
         setEndpoints(data);
       }
     } catch {
-      toast.error("Failed to load endpoints");
+      showToast.error("Failed to load endpoints", 'analyzer');
     }
   };
 
@@ -388,22 +407,22 @@ export default function Playground() {
       const parsed = JSON.parse(requestBody);
       const prettified = JSON.stringify(parsed, null, 2);
       updateCurrentTabBody(prettified);
-      toast.success("JSON prettified");
+      showToast.success("JSON prettified", 'analyzer');
     } catch {
-      toast.error("Invalid JSON - cannot prettify");
+      showToast.error("Invalid JSON - cannot prettify", 'analyzer');
     }
   };
 
   const sendRequest = async () => {
     if (!url) {
-      toast.warning("Please select an endpoint");
+      showToast.warning("Please select an endpoint", 'analyzer');
       return;
     }
 
 
     const validation = isValidApiUrl(url, method);
     if (!validation.valid) {
-      toast.error(validation.error);
+      showToast.error(validation.error || 'Validation error', 'analyzer');
       return;
     }
 
@@ -439,7 +458,7 @@ export default function Playground() {
             });
             fetchUrl = urlObj.toString();
           } catch {
-            toast.error("Invalid JSON for query parameters");
+            showToast.error("Invalid JSON for query parameters", 'analyzer');
             setIsLoading(false);
             return;
           }
@@ -496,14 +515,14 @@ export default function Playground() {
   const copyResponse = () => {
     if (responseData) {
       navigator.clipboard.writeText(responseData);
-      toast.success("Response copied!");
+      showToast.success("Response copied!", 'clipboard');
     }
   };
 
   const copyApiKey = () => {
     if (apiKey) {
       navigator.clipboard.writeText(apiKey);
-      toast.success("API key copied!");
+      showToast.success("API key copied!", 'clipboard');
     }
   };
 
@@ -511,22 +530,22 @@ export default function Playground() {
     const result = await toggleAppMode();
     if (result.success) {
       const newMode = useThemeStore.getState().appMode;
-      toast.success(
+      showToast.success(
         `Switched to ${newMode === "live" ? "Live" : "Analyze"} mode`,
+        'analyzer'
       );
 
       if (newMode === "analyzer") {
         setTimeout(() => {
-          toast.warning(
-            "⚠️ Analyzer (Sandbox) mode is for testing purposes only",
-            {
-              duration: 10000,
-            },
+          showToast.warning(
+            "Analyzer (Sandbox) mode is for testing purposes only",
+            'analyzer',
+            { duration: 10000 },
           );
         }, 2000);
       }
     } else {
-      toast.error(result.message || "Failed to toggle mode");
+      showToast.error(result.message || "Failed to toggle mode", 'analyzer');
     }
   };
 
@@ -546,7 +565,7 @@ export default function Playground() {
         });
         curlUrl = urlObj.toString();
       } catch {
-        toast.error("Invalid JSON for query parameters");
+        showToast.error("Invalid JSON for query parameters", 'analyzer');
         return;
       }
     }
@@ -561,7 +580,7 @@ export default function Playground() {
     }
 
     navigator.clipboard.writeText(curl);
-    toast.success("Copied as cURL");
+    showToast.success("Copied as cURL", 'clipboard');
   };
 
   // Filter endpoints by search
@@ -806,7 +825,7 @@ export default function Playground() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleLogout}
+                onClick={() => setShowLogoutDialog(true)}
                 className="text-destructive focus:text-destructive"
               >
                 <LogOut className="h-4 w-4 mr-2" />
@@ -816,6 +835,12 @@ export default function Playground() {
           </DropdownMenu>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
@@ -963,7 +988,7 @@ export default function Playground() {
                   ) : (
                     <>
                       <span className="text-muted-foreground">
-                        http://127.0.0.1:5000
+                        {hostServer}
                       </span>
                       <span className="text-foreground">{url}</span>
                     </>

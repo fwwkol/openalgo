@@ -37,10 +37,10 @@ if "%OPENALGO_DIR:~-1%"=="\" set OPENALGO_DIR=%OPENALGO_DIR:~0,-1%
 set SETUP_FAILED=0
 
 REM XTS Brokers that require market data credentials
-set XTS_BROKERS=fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom
+set XTS_BROKERS=fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom
 
 REM Valid brokers list
-set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha
+set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha
 
 REM Banner
 echo.
@@ -157,10 +157,10 @@ echo   ========================================
 echo.
 echo   Valid brokers:
 echo   fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,
-echo   definedge, dhan, dhan_sandbox, firstock, flattrade, fyers,
-echo   groww, ibulls, iifl, indmoney, jainamxts, kotak, motilal,
-echo   mstock, paytm, pocketful, samco, shoonya, tradejini,
-echo   upstox, wisdom, zebu, zerodha
+echo   definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,
+echo   groww, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,
+echo   mstock, nubra, paytm, pocketful, rmoney, samco, shoonya,
+echo   tradejini, upstox, wisdom, zebu, zerodha
 echo.
 
 :get_broker
@@ -321,13 +321,61 @@ REM Stop and remove existing container if exists
 docker stop %CONTAINER% >nul 2>&1
 docker rm %CONTAINER% >nul 2>&1
 
+REM Calculate dynamic resource limits based on available RAM
+for /f "tokens=2 delims==" %%i in ('wmic computersystem get TotalPhysicalMemory /value ^| findstr TotalPhysicalMemory') do set TOTAL_RAM_BYTES=%%i
+set /a TOTAL_RAM_MB=%TOTAL_RAM_BYTES:~0,-6%
+
+REM Get CPU cores
+for /f "tokens=2 delims==" %%i in ('wmic cpu get NumberOfCores /value ^| findstr NumberOfCores') do set CPU_CORES=%%i
+if "%CPU_CORES%"=="" set CPU_CORES=2
+
+REM shm_size: 25% of RAM (min 256MB, max 2GB)
+set /a SHM_SIZE_MB=%TOTAL_RAM_MB% / 4
+if %SHM_SIZE_MB% LSS 256 set SHM_SIZE_MB=256
+if %SHM_SIZE_MB% GTR 2048 set SHM_SIZE_MB=2048
+
+REM Thread limits based on RAM (prevents RLIMIT_NPROC exhaustion)
+REM Less than 3GB: 1 thread | 3-6GB: 2 threads | 6GB+: min(4, cores)
+REM See: https://github.com/marketcalls/openalgo/issues/822
+if %TOTAL_RAM_MB% LSS 3000 (
+    set THREAD_LIMIT=1
+) else if %TOTAL_RAM_MB% LSS 6000 (
+    set THREAD_LIMIT=2
+) else (
+    if %CPU_CORES% LSS 4 (
+        set THREAD_LIMIT=%CPU_CORES%
+    ) else (
+        set THREAD_LIMIT=4
+    )
+)
+
+REM Strategy memory limit based on RAM
+REM Less than 3GB: 256MB | 3-6GB: 512MB | 6GB+: 1024MB
+if %TOTAL_RAM_MB% LSS 3000 (
+    set STRATEGY_MEM_LIMIT=256
+) else if %TOTAL_RAM_MB% LSS 6000 (
+    set STRATEGY_MEM_LIMIT=512
+) else (
+    set STRATEGY_MEM_LIMIT=1024
+)
+
+echo [INFO] System: %TOTAL_RAM_MB%MB RAM, %CPU_CORES% cores
+echo [INFO] Config: shm=%SHM_SIZE_MB%MB, threads=%THREAD_LIMIT%, strategy_mem=%STRATEGY_MEM_LIMIT%MB
+
 REM Run container
 echo [INFO] Starting container...
 docker run -d ^
     --name %CONTAINER% ^
-    --shm-size=2g ^
+    --shm-size=%SHM_SIZE_MB%m ^
     -p 5000:5000 ^
     -p 8765:8765 ^
+    -e "OPENBLAS_NUM_THREADS=%THREAD_LIMIT%" ^
+    -e "OMP_NUM_THREADS=%THREAD_LIMIT%" ^
+    -e "MKL_NUM_THREADS=%THREAD_LIMIT%" ^
+    -e "NUMEXPR_NUM_THREADS=%THREAD_LIMIT%" ^
+    -e "NUMBA_NUM_THREADS=%THREAD_LIMIT%" ^
+    -e "STRATEGY_MEMORY_LIMIT_MB=%STRATEGY_MEM_LIMIT%" ^
+    -e "TZ=Asia/Kolkata" ^
     -v "%OPENALGO_DIR%\db:/app/db" ^
     -v "%OPENALGO_DIR%\strategies:/app/strategies" ^
     -v "%OPENALGO_DIR%\log:/app/log" ^
@@ -460,7 +508,7 @@ echo   - Strategies: %OPENALGO_DIR%\strategies\
 echo   - Logs:       %OPENALGO_DIR%\log\
 echo.
 echo XTS Brokers (require market data credentials):
-echo   fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom
+echo   fivepaisaxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom
 echo.
 goto end
 

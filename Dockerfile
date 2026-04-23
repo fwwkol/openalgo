@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir uv && \
     uv venv .venv && \
     uv pip install --upgrade pip && \
     uv sync && \
-    uv pip install gunicorn eventlet>=0.40.3 && \
+    uv pip install "gunicorn>=25.0,<26" eventlet && \
     rm -rf /root/.cache
 
 # ------------------------------ Frontend Builder Stage --------------------- #
@@ -25,12 +25,17 @@ RUN cd frontend && npm run build
 # ------------------------------ Production Stage --------------------------- #
 FROM python:3.12-slim-bullseye AS production
 # 0 – set timezone to IST (Asia/Kolkata) & install runtime dependencies
+#     chromium + fonts-liberation are required by Kaleido 1.x (plotly static
+#     image export) which drives a real headless Chromium via choreographer.
+#     Without these, /chart in the Telegram bot silently fails inside Docker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     curl \
     libopenblas0 \
     libgomp1 \
-    libgfortran5 && \
+    libgfortran5 \
+    chromium \
+    fonts-liberation && \
     ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -53,6 +58,8 @@ RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache 
 COPY --chown=appuser:appuser start.sh /app/start.sh
 RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 # ---- RUNTIME ENVS --------------------------------------------------------- #
+# Limit OpenBLAS/NumPy threads to prevent RLIMIT_NPROC exhaustion in Docker
+# See: https://github.com/marketcalls/openalgo/issues/822
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -60,7 +67,15 @@ ENV PATH="/app/.venv/bin:$PATH" \
     APP_MODE=standalone \
     TMPDIR=/app/tmp \
     NUMBA_CACHE_DIR=/app/tmp/numba_cache \
-    MPLCONFIGDIR=/app/tmp/matplotlib
+    LLVMLITE_TMPDIR=/app/tmp \
+    MPLCONFIGDIR=/app/tmp/matplotlib \
+    OPENBLAS_NUM_THREADS=2 \
+    OMP_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2 \
+    NUMEXPR_NUM_THREADS=2 \
+    NUMBA_NUM_THREADS=2 \
+    BROWSER_PATH=/usr/bin/chromium \
+    CHROME_BIN=/usr/bin/chromium
 # --------------------------------------------------------------------------- #
 USER appuser
 EXPOSE 5000

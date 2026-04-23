@@ -1,8 +1,10 @@
 # PRD: WebSocket Proxy - Real-Time Market Data
 
+> **Status:** ✅ Stable - Fully implemented with connection pooling
+
 ## Overview
 
-The WebSocket Proxy is a unified real-time market data streaming system that normalizes data from 24+ broker WebSocket APIs into a single interface.
+The WebSocket Proxy is a unified real-time market data streaming system that normalizes data from 29 broker WebSocket APIs into a single interface.
 
 ## Problem Statement
 
@@ -261,11 +263,12 @@ start_websocket_proxy(app)
 
 | File | Purpose |
 |------|---------|
-| `websocket_proxy/server.py` | Main WebSocketProxy class |
-| `websocket_proxy/base_adapter.py` | Abstract broker adapter |
-| `websocket_proxy/broker_factory.py` | Adapter factory |
-| `websocket_proxy/app_integration.py` | Flask integration |
-| `broker/*/streaming/*_adapter.py` | Broker implementations |
+| `websocket_proxy/server.py` | Main WebSocketProxy class with ZMQ subscription |
+| `websocket_proxy/connection_manager.py` | ConnectionPool and SharedZmqPublisher for pooling |
+| `websocket_proxy/base_adapter.py` | Abstract broker adapter base class |
+| `websocket_proxy/broker_factory.py` | Adapter factory for broker discovery |
+| `websocket_proxy/app_integration.py` | Flask startup/shutdown integration |
+| `broker/*/streaming/*_adapter.py` | Broker-specific adapter implementations |
 
 ## Success Metrics
 

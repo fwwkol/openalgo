@@ -13,8 +13,16 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
-# Toggle between async and threaded approach
-USE_ASYNC = True  # Set to True to use asyncio (better performance)
+# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
+# asyncio.run() cannot be called under eventlet's monkey-patched event loop
+def _is_eventlet_patched():
+    try:
+        import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched("socket")
+    except (ImportError, AttributeError):
+        return False
+
+USE_ASYNC = not _is_eventlet_patched()
 
 logger = get_logger(__name__)
 
@@ -101,7 +109,7 @@ class BrokerData:
                 "token": token,
             }
 
-            response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
+            response = get_api_response("/PiConnectAPI/GetQuotes", self.auth_token, payload=payload)
 
             if response.get("stat") != "Ok":
                 raise Exception(
@@ -180,7 +188,7 @@ class BrokerData:
 
             payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            url = "https://piconnect.flattrade.in/PiConnectTP/GetQuotes"
+            url = "https://piconnect.flattrade.in/PiConnectAPI/GetQuotes"
 
             # Use httpx.post for sync requests
             http_response = httpx.post(url, content=payload_str, headers=headers, timeout=10.0)
@@ -230,7 +238,7 @@ class BrokerData:
 
             payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            url = "https://piconnect.flattrade.in/PiConnectTP/GetQuotes"
+            url = "https://piconnect.flattrade.in/PiConnectAPI/GetQuotes"
 
             # Use async httpx client
             http_response = await client.post(url, content=payload_str, headers=headers)
@@ -364,11 +372,21 @@ class BrokerData:
         # Step 2: Make concurrent API calls
         start_time = time.time()
 
-        if USE_ASYNC:
+        # Runtime check: even if USE_ASYNC is True, asyncio.run() will crash
+        # if called from within an already-running event loop
+        use_async = USE_ASYNC
+        if use_async:
+            try:
+                asyncio.get_running_loop()
+                use_async = False
+            except RuntimeError:
+                pass
+
+        if use_async:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
-            # ThreadPoolExecutor approach
+            # ThreadPoolExecutor approach (works in any context)
             results = []
             with ThreadPoolExecutor(max_workers=40) as executor:
                 future_to_symbol = {
@@ -429,7 +447,7 @@ class BrokerData:
                 "token": token,
             }
 
-            response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
+            response = get_api_response("/PiConnectAPI/GetQuotes", self.auth_token, payload=payload)
 
             if response.get("stat") != "Ok":
                 raise Exception(
@@ -541,7 +559,7 @@ class BrokerData:
                 logger.debug(f"EOD Payload: {payload}")  # Debug print
                 try:
                     response = get_api_response(
-                        "/PiConnectTP/EODChartData", self.auth_token, payload=payload
+                        "/PiConnectAPI/EODChartData", self.auth_token, payload=payload
                     )
                     logger.debug(f"EOD Response: {response}")  # Debug print
                 except Exception as e:
@@ -559,7 +577,7 @@ class BrokerData:
                 }
                 logger.debug(f"Intraday Payload: {payload}")  # Debug print
                 response = get_api_response(
-                    "/PiConnectTP/TPSeries", self.auth_token, payload=payload
+                    "/PiConnectAPI/TPSeries", self.auth_token, payload=payload
                 )
                 logger.debug(f"Intraday Response: {response}")  # Debug print
 

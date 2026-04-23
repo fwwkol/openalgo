@@ -23,6 +23,26 @@ export interface QuotesData {
   volume: number
 }
 
+export interface DepthLevel {
+  price: number
+  quantity: number
+}
+
+export interface DepthData {
+  asks: DepthLevel[]
+  bids: DepthLevel[]
+  high: number
+  low: number
+  ltp: number
+  ltq: number
+  oi: number
+  open: number
+  prev_close: number
+  totalbuyqty: number
+  totalsellqty: number
+  volume: number
+}
+
 export interface MultiQuotesSymbol {
   symbol: string
   exchange: string
@@ -39,6 +59,32 @@ export interface MultiQuotesApiResponse {
   status: 'success' | 'error'
   results?: MultiQuotesResult[]
   message?: string
+}
+
+export interface BasketOrderItem {
+  symbol: string
+  exchange: string
+  action: 'BUY' | 'SELL'
+  quantity: number
+  pricetype: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  product: 'CNC' | 'NRML' | 'MIS'
+  price?: number
+  trigger_price?: number
+  disclosed_quantity?: number
+}
+
+export interface BasketOrderResult {
+  symbol: string
+  status: 'success' | 'error'
+  orderid?: string
+  message?: string
+}
+
+export interface BasketOrderResponse {
+  status: 'success' | 'error'
+  message?: string
+  results?: BasketOrderResult[]
+  mode?: 'live' | 'analyze'
 }
 
 export const tradingApi = {
@@ -68,6 +114,22 @@ export const tradingApi = {
     const response = await apiClient.post<MultiQuotesApiResponse>('/multiquotes', {
       apikey: apiKey,
       symbols,
+    })
+    return response.data
+  },
+
+  /**
+   * Get market depth for a symbol (5-level order book)
+   */
+  getDepth: async (
+    apiKey: string,
+    symbol: string,
+    exchange: string
+  ): Promise<ApiResponse<DepthData>> => {
+    const response = await apiClient.post<ApiResponse<DepthData>>('/depth', {
+      apikey: apiKey,
+      symbol,
+      exchange,
     })
     return response.data
   },
@@ -135,7 +197,24 @@ export const tradingApi = {
    * Place order
    */
   placeOrder: async (order: PlaceOrderRequest): Promise<ApiResponse<{ orderid: string }>> => {
-    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/place_order', order)
+    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/placeorder', order)
+    return response.data
+  },
+
+  /**
+   * Place a basket of orders in one call. Each item is independent — the
+   * backend returns a per-order `results[]` so partial success is possible.
+   */
+  placeBasketOrder: async (
+    apiKey: string,
+    strategy: string,
+    orders: BasketOrderItem[]
+  ): Promise<BasketOrderResponse> => {
+    const response = await apiClient.post<BasketOrderResponse>('/basketorder', {
+      apikey: apiKey,
+      strategy,
+      orders,
+    })
     return response.data
   },
 

@@ -35,7 +35,7 @@ def get_csp_config():
         csp_config["style-src"] = style_src
 
     # Image source directive
-    img_src = os.getenv("CSP_IMG_SRC", "'self' data:")
+    img_src = os.getenv("CSP_IMG_SRC", "'self' data: blob:")
     if img_src:
         csp_config["img-src"] = img_src
 
@@ -126,6 +126,15 @@ def get_security_headers():
     Get additional security headers configuration from environment variables.
     """
     headers = {}
+
+    # X-Frame-Options: prevent clickjacking
+    headers["X-Frame-Options"] = "DENY"
+
+    # X-Content-Type-Options: prevent MIME-type sniffing
+    headers["X-Content-Type-Options"] = "nosniff"
+
+    # X-XSS-Protection: legacy XSS protection for older browsers
+    headers["X-XSS-Protection"] = "1; mode=block"
 
     # Referrer Policy
     referrer_policy = os.getenv("REFERRER_POLICY", "strict-origin-when-cross-origin")

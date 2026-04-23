@@ -3,6 +3,7 @@
 import logging
 
 from .base_adapter import (
+    BaseBrokerWebSocketAdapter,
     ENABLE_CONNECTION_POOLING,
     MAX_SYMBOLS_PER_WEBSOCKET,
     MAX_WEBSOCKET_CONNECTIONS,
@@ -11,6 +12,7 @@ from .broker_factory import (
     cleanup_all_pools,
     create_broker_adapter,
     get_pool_stats,
+    get_resource_health,
     register_adapter,
 )
 from .connection_manager import (
@@ -70,11 +72,17 @@ from broker.motilal.streaming.motilal_adapter import MotilalWebSocketAdapter
 # Import the mstock_adapter
 from broker.mstock.streaming.mstock_adapter import MstockWebSocketAdapter
 
+# Import the nubra_adapter
+from broker.nubra.streaming.nubra_adapter import NubraWebSocketAdapter
+
 # Import the paytm_adapter
 from broker.paytm.streaming.paytm_adapter import PaytmWebSocketAdapter
 
 # Import the pocketful_adapter
 from broker.pocketful.streaming.pocketful_adapter import PocketfulWebSocketAdapter
+
+# Import the rmoney_adapter
+from broker.rmoney.streaming.rmoney_adapter import RMoneyWebSocketAdapter
 
 # Import the samco_adapter
 from broker.samco.streaming.samco_adapter import SamcoWebSocketAdapter
@@ -116,6 +124,8 @@ register_adapter("motilal", MotilalWebSocketAdapter)
 register_adapter("jainamxts", JainamXTSWebSocketAdapter)
 register_adapter("samco", SamcoWebSocketAdapter)
 register_adapter("pocketful", PocketfulWebSocketAdapter)
+register_adapter("nubra", NubraWebSocketAdapter)
+register_adapter("rmoney", RMoneyWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -125,10 +135,13 @@ __all__ = [
     "websocket_main",
     "register_adapter",
     "create_broker_adapter",
+    # Base adapter (for cleanup utilities)
+    "BaseBrokerWebSocketAdapter",
     # Connection pooling (multi-websocket support)
     "ConnectionPool",
     "SharedZmqPublisher",
     "get_pool_stats",
+    "get_resource_health",
     "cleanup_all_pools",
     "get_max_symbols_per_websocket",
     "get_max_websocket_connections",
@@ -161,4 +174,6 @@ __all__ = [
     "JainamXTSWebSocketAdapter",
     "SamcoWebSocketAdapter",
     "PocketfulWebSocketAdapter",
+    "NubraWebSocketAdapter",
+    "RMoneyWebSocketAdapter",
 ]

@@ -76,18 +76,58 @@ def request(method: str, url: str, **kwargs) -> httpx.Response:
 
 # Shortcut methods for common HTTP methods
 def get(url: str, **kwargs) -> httpx.Response:
+    """
+    Send a GET request.
+
+    Args:
+        url (str): The URL to send the GET request to.
+        **kwargs: Additional arguments passed to the underlying request method.
+
+    Returns:
+        httpx.Response: The HTTP response from the server.
+    """
     return request("GET", url, **kwargs)
 
 
 def post(url: str, **kwargs) -> httpx.Response:
+    """
+    Send a POST request.
+
+    Args:
+        url (str): The URL to send the POST request to.
+        **kwargs: Additional arguments passed to the underlying request method.
+
+    Returns:
+        httpx.Response: The HTTP response from the server.
+    """
     return request("POST", url, **kwargs)
 
 
 def put(url: str, **kwargs) -> httpx.Response:
+    """
+    Send a PUT request.
+
+    Args:
+        url (str): The URL to send the PUT request to.
+        **kwargs: Additional arguments passed to the underlying request method.
+
+    Returns:
+        httpx.Response: The HTTP response from the server.
+    """
     return request("PUT", url, **kwargs)
 
 
 def delete(url: str, **kwargs) -> httpx.Response:
+    """
+    Send a DELETE request.
+
+    Args:
+        url (str): The URL to send the DELETE request to.
+        **kwargs: Additional arguments passed to the underlying request method.
+
+    Returns:
+        httpx.Response: The HTTP response from the server.
+    """
     return request("DELETE", url, **kwargs)
 
 
@@ -146,9 +186,9 @@ def _create_http_client() -> httpx.Client:
             http1=True,  # Always enable HTTP/1.1 for compatibility
             timeout=120.0,  # Increased timeout for large historical data requests
             limits=httpx.Limits(
-                max_keepalive_connections=20,  # Balanced for most broker APIs
-                max_connections=50,  # Reasonable max without overloading
-                keepalive_expiry=120.0,  # 2 minutes - good balance
+                max_keepalive_connections=40,  # Increased from 20 for multi-strategy environments
+                max_connections=100,  # Increased from 50 for 10+ concurrent strategies
+                keepalive_expiry=30.0,  # Reduced from 120s to recycle stale connections faster
             ),
             # Add verify parameter to handle SSL/TLS issues in standalone mode
             verify=True,  # Can be set to False for debugging SSL issues (not recommended for production)
@@ -168,10 +208,15 @@ def _create_http_client() -> httpx.Client:
         raise
 
 
-def cleanup_httpx_client():
+def cleanup_httpx_client() -> None:
     """
     Closes the global httpx client and releases its resources.
-    Should be called when the application is shutting down.
+
+    Should be called when the application is shutting down to prevent
+    resource leaks.
+
+    Returns:
+        None
     """
     global _httpx_client
 

@@ -1,8 +1,9 @@
 import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { authApi } from '@/api/auth'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,25 +13,42 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet'
 import { isActiveRoute, mobileSheetItems, navItems, profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { useBrokerStore } from '@/stores/brokerStore'
 import { useThemeStore } from '@/stores/themeStore'
 
 export function Navbar() {
   const location = useLocation()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  const { capabilities } = useBrokerStore()
+
+  // Filter menu items based on broker capabilities
+  const filteredProfileMenuItems = profileMenuItems.filter((item) => {
+    if (item.href === '/leverage') return capabilities?.leverage_config === true
+    if (item.href === '/holdings') return capabilities?.broker_type !== 'crypto'
+    return true
+  })
 
   const handleLogout = async () => {
     try {
       await authApi.logout()
       logout()
       navigate('/login')
-      toast.success('Logged out successfully')
+      showToast.success('Logged out successfully')
     } catch {
       logout()
       navigate('/login')
@@ -41,18 +59,18 @@ export function Navbar() {
     const result = await toggleAppMode()
     if (result.success) {
       const newMode = useThemeStore.getState().appMode
-      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
+      showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
 
       // Show warning toast when enabling analyzer mode (like old UI)
       if (newMode === 'analyzer') {
         setTimeout(() => {
-          toast.warning('⚠️ Analyzer (Sandbox) mode is for testing purposes only', {
+          showToast.warning('Analyzer (Sandbox) mode is for testing purposes only', undefined, {
             duration: 10000,
           })
         }, 2000)
       }
     } else {
-      toast.error(result.message || 'Failed to toggle mode')
+      showToast.error(result.message || 'Failed to toggle mode')
     }
   }
 
@@ -69,7 +87,12 @@ export function Navbar() {
               <span className="sr-only">Toggle menu</span>
             </Button>
           </SheetTrigger>
-          <SheetContent side="left" className="w-72">
+          <SheetContent side="left" className="w-72 overflow-y-auto">
+            {/* Visually hidden but accessible for screen readers */}
+            <SheetHeader className="sr-only">
+              <SheetTitle>Navigation Menu</SheetTitle>
+              <SheetDescription>Main navigation and quick access links</SheetDescription>
+            </SheetHeader>
             <div className="flex flex-col gap-4 py-4">
               <Link
                 to="/dashboard"
@@ -79,8 +102,12 @@ export function Navbar() {
                 <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
                 <span className="font-semibold">OpenAlgo</span>
               </Link>
+
+              {/* Secondary nav items (not in bottom nav) */}
               <nav className="flex flex-col gap-1">
-                {/* Show secondary items not in bottom nav */}
+                <div className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Navigation
+                </div>
                 {mobileSheetItems.map((item) => (
                   <Link
                     key={item.href}
@@ -97,6 +124,39 @@ export function Navbar() {
                     {item.label}
                   </Link>
                 ))}
+              </nav>
+
+              {/* Profile menu items for mobile access */}
+              <nav className="flex flex-col gap-1 border-t pt-4">
+                <div className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Quick Access
+                </div>
+                {filteredProfileMenuItems.map((item) => (
+                  <Link
+                    key={item.href}
+                    to={item.href}
+                    onClick={() => setMobileOpen(false)}
+                    className={cn(
+                      'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
+                      isActive(item.href)
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted active:bg-muted'
+                    )}
+                  >
+                    <item.icon className="h-4 w-4" />
+                    {item.label}
+                  </Link>
+                ))}
+                <a
+                  href="https://docs.openalgo.in"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation hover:bg-muted active:bg-muted"
+                  onClick={() => setMobileOpen(false)}
+                >
+                  <BookOpen className="h-4 w-4" />
+                  Docs
+                </a>
               </nav>
             </div>
           </SheetContent>
@@ -196,7 +256,7 @@ export function Navbar() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              {profileMenuItems.map((item) => (
+              {filteredProfileMenuItems.map((item) => (
                 <DropdownMenuItem
                   key={item.href}
                   onSelect={() => navigate(item.href)}
@@ -219,7 +279,7 @@ export function Navbar() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleLogout}
+                onClick={() => setShowLogoutDialog(true)}
                 className="text-destructive focus:text-destructive"
               >
                 <LogOut className="h-4 w-4 mr-2" />
@@ -229,6 +289,12 @@ export function Navbar() {
           </DropdownMenu>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
     </nav>
   )
 }

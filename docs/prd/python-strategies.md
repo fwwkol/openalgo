@@ -1,5 +1,7 @@
 # PRD: Python Strategies - Automated Strategy Execution
 
+> **Status:** ✅ Stable - Fully implemented, production-ready
+
 ## Overview
 
 Python Strategies enables traders to run custom Python trading algorithms within OpenAlgo, with process isolation, market-aware scheduling, and comprehensive lifecycle management.
@@ -88,9 +90,19 @@ A subprocess-based strategy execution system that:
 |-------------|--------|
 | Strategy startup time | < 5 seconds |
 | Log latency (event → display) | < 1 second |
-| Max concurrent strategies | 50 |
-| Memory per strategy | 512MB limit (Unix) |
+| Max concurrent strategies | 50 (system-dependent) |
+| Memory per strategy | 256MB-1024MB (configurable) |
 | Scheduler precision | ±1 minute |
+
+### Docker Resource Requirements
+
+| Container RAM | Thread Limit | Memory/Strategy | Max Strategies |
+|---------------|--------------|-----------------|----------------|
+| 2GB | 1 | 256MB | 5 |
+| 4GB | 2 | 512MB | 5-8 |
+| 8GB+ | 2-4 | 1024MB | 10+ |
+
+> **Note**: Thread limits (`OPENBLAS_NUM_THREADS`, etc.) prevent RLIMIT_NPROC exhaustion when using NumPy/SciPy/Numba. See [Issue #822](https://github.com/marketcalls/openalgo/issues/822).
 
 ## Architecture
 
@@ -267,7 +279,7 @@ openalgo/
 ├── log/
 │   └── strategies/        # Strategy output logs
 └── blueprints/
-    └── python_strategy.py # Strategy hosting (2500+ lines)
+    └── python_strategy.py # Strategy hosting (~2680 lines)
 ```
 
 ## Related Documentation
@@ -277,6 +289,18 @@ openalgo/
 | [Process Management](./python-strategies-process-management.md) | Subprocess handling and lifecycle |
 | [Scheduling Guide](./python-strategies-scheduling.md) | Market-aware scheduling with APScheduler |
 | [API Reference](./python-strategies-api-reference.md) | Complete API documentation |
+
+## Key Files Reference
+
+| File | Purpose | Lines |
+|------|---------|-------|
+| `blueprints/python_strategy.py` | Main implementation with routes, process management, scheduling | ~2680 |
+| `strategies/scripts/` | User-uploaded strategy Python files | - |
+| `strategies/examples/` | Template strategies for users | - |
+| `strategies/strategy_configs.json` | Strategy configuration storage | - |
+| `log/strategies/` | Strategy execution log files | - |
+
+> **Note:** React frontend for strategy management is served via the Flask backend's Jinja2 templates. The strategy list, upload, and log viewing are available at `/python/*` routes.
 
 ## Success Metrics
 

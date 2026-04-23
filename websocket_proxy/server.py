@@ -79,6 +79,13 @@ class WebSocketProxy:
         # PERFORMANCE OPTIMIZATION 3: Pre-compute mode mappings
         self.MODE_MAP = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
 
+        # RESOURCE MONITORING: Track metrics for health checks
+        self._stats_lock = aio.Lock() if hasattr(aio, 'Lock') else None
+        self._messages_processed = 0
+        self._last_cleanup_time = time.time()
+        self._cleanup_interval = 300  # Clean stale entries every 5 minutes
+        self._throttle_entry_max_age = 60  # Remove throttle entries older than 60 seconds
+
         # ZeroMQ context for subscribing to broker adapters
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.SUB)
@@ -165,6 +172,11 @@ class WebSocketProxy:
                 except aio.CancelledError:
                     pass
 
+                # Properly stop the server and release the port.
+                # This calls server.wait_closed() which ensures the socket
+                # is fully released before the event loop shuts down.
+                await self.stop()
+
             except Exception as e:
                 logger.exception(f"Failed to start WebSocket server: {e}")
                 raise
@@ -230,7 +242,7 @@ class WebSocketProxy:
                     logger.exception(f"Error disconnecting adapter for user {user_id}: {e}")
 
             # Close ZeroMQ socket with linger=0 for immediate close
-            if hasattr(self, "socket") and self.socket:
+            if hasattr(self, "socket") and self.socket and not self.socket.closed:
                 try:
                     self.socket.setsockopt(zmq.LINGER, 0)  # Don't wait for pending messages
                     self.socket.close()
@@ -238,7 +250,7 @@ class WebSocketProxy:
                     logger.exception(f"Error closing ZMQ socket: {e}")
 
             # Close ZeroMQ context with timeout
-            if hasattr(self, "context") and self.context:
+            if hasattr(self, "context") and self.context and not self.context.closed:
                 try:
                     self.context.term()
                 except Exception as e:
@@ -248,6 +260,134 @@ class WebSocketProxy:
 
         except Exception as e:
             logger.exception(f"Error during WebSocket server stop: {e}")
+
+    def _cleanup_zmq_sync(self):
+        """
+        Synchronous cleanup of ZeroMQ resources.
+        Called from __del__ to ensure resources are freed even if stop() is never called.
+        """
+        try:
+            if hasattr(self, "socket") and self.socket:
+                try:
+                    self.socket.setsockopt(zmq.LINGER, 0)
+                    self.socket.close()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+                finally:
+                    self.socket = None
+
+            if hasattr(self, "context") and self.context:
+                try:
+                    self.context.term()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+                finally:
+                    self.context = None
+        except Exception:
+            pass  # Suppress all errors in cleanup
+
+    def __del__(self):
+        """
+        Destructor to ensure ZeroMQ resources are cleaned up.
+        This is a safety net for cases where stop() is never called
+        (e.g., exception during start() or unexpected termination).
+        """
+        try:
+            self.running = False
+            self._cleanup_zmq_sync()
+        except Exception:
+            pass  # Cannot raise in __del__
+
+    def get_health_stats(self) -> dict:
+        """
+        Get health statistics for monitoring file descriptors and resources.
+
+        Returns:
+            dict: Health statistics including connection counts, subscription metrics,
+                  and resource usage information.
+        """
+        try:
+            # Get base adapter stats if available
+            from .base_adapter import BaseBrokerWebSocketAdapter
+            adapter_stats = BaseBrokerWebSocketAdapter.get_resource_stats()
+        except Exception:
+            adapter_stats = {}
+
+        # Calculate subscription index stats
+        total_subscriptions = len(self.subscription_index)
+        total_client_subscriptions = sum(len(clients) for clients in self.subscription_index.values())
+        throttle_entries = len(self.last_message_time)
+
+        return {
+            "server": {
+                "running": self.running,
+                "host": self.host,
+                "port": self.port,
+            },
+            "clients": {
+                "connected_count": len(self.clients),
+                "user_mappings": len(self.user_mapping),
+            },
+            "subscriptions": {
+                "unique_symbols": total_subscriptions,
+                "total_client_subscriptions": total_client_subscriptions,
+                "per_client_counts": {
+                    str(client_id): len(subs)
+                    for client_id, subs in self.subscriptions.items()
+                },
+            },
+            "broker_adapters": {
+                "active_count": len(self.broker_adapters),
+                "brokers": list(self.user_broker_mapping.values()),
+            },
+            "performance": {
+                "throttle_entries": throttle_entries,
+                "messages_processed": self._messages_processed,
+                "last_cleanup_time": self._last_cleanup_time,
+            },
+            "zmq_resources": adapter_stats,
+        }
+
+    def _cleanup_stale_throttle_entries(self):
+        """
+        Remove stale entries from last_message_time dict.
+
+        This prevents unbounded memory growth from symbols that were
+        subscribed to but are no longer active.
+        """
+        current_time = time.time()
+
+        # Only run cleanup periodically
+        if current_time - self._last_cleanup_time < self._cleanup_interval:
+            return
+
+        self._last_cleanup_time = current_time
+        initial_count = len(self.last_message_time)
+
+        # Find and remove stale entries
+        stale_keys = [
+            key for key, timestamp in self.last_message_time.items()
+            if current_time - timestamp > self._throttle_entry_max_age
+        ]
+
+        for key in stale_keys:
+            del self.last_message_time[key]
+
+        if stale_keys:
+            logger.info(
+                f"Cleaned up {len(stale_keys)} stale throttle entries "
+                f"(was {initial_count}, now {len(self.last_message_time)})"
+            )
+
+        # Log subscription index stats periodically
+        total_subs = len(self.subscription_index)
+        total_clients = len(self.clients)
+        if total_subs > 0 or total_clients > 0:
+            logger.debug(
+                f"Resource stats: {total_clients} clients, "
+                f"{total_subs} unique subscriptions, "
+                f"{len(self.last_message_time)} throttle entries"
+            )
 
     async def handle_client(self, websocket):
         """
@@ -263,6 +403,28 @@ class WebSocketProxy:
         # Get path info from websocket if available
         path = getattr(websocket, "path", "/unknown")
         logger.info(f"Client connected: {client_id} from path: {path}")
+
+        # Unauthenticated grace window: drop connections that don't complete auth
+        # within WS_AUTH_GRACE_SECONDS to prevent idle/holding-pattern resource
+        # exhaustion from unauthenticated clients on a public-facing port.
+        auth_grace_seconds = int(os.getenv("WS_AUTH_GRACE_SECONDS", "15"))
+
+        async def _enforce_auth_deadline():
+            try:
+                await aio.sleep(auth_grace_seconds)
+                if client_id not in self.user_mapping:
+                    logger.warning(
+                        f"Client {client_id} failed to authenticate within "
+                        f"{auth_grace_seconds}s — closing connection"
+                    )
+                    try:
+                        await websocket.close(code=4401, reason="auth timeout")
+                    except Exception:
+                        pass
+            except aio.CancelledError:
+                pass
+
+        auth_deadline_task = aio.ensure_future(_enforce_auth_deadline())
 
         try:
             # Process messages from the client
@@ -283,6 +445,7 @@ class WebSocketProxy:
         except Exception as e:
             logger.exception(f"Unexpected error handling client {client_id}: {e}")
         finally:
+            auth_deadline_task.cancel()
             # Clean up when the client disconnects
             await self.cleanup_client(client_id)
 
@@ -689,8 +852,7 @@ class WebSocketProxy:
                         await self.send_error(client_id, "BROKER_ERROR", str(retry_error))
                         return
                 else:
-                    import traceback
-                    logger.exception(traceback.format_exc())
+                    logger.exception(f"Broker error for {broker_name}: {error_str}")
                     await self.send_error(client_id, "BROKER_ERROR", error_str)
                     return
 
@@ -1164,32 +1326,26 @@ class WebSocketProxy:
 
             logger.info(f"Received cache invalidation for user: {user_id}, type: {cache_type}")
 
-            # Clear auth caches for this user
-            cache_key_auth = f"auth-{user_id}"
-            cache_key_feed = f"feed-{user_id}"
-
+            # CRITICAL: Clear ALL cache entries to prevent stale token issues
+            # This is necessary because get_auth_token_broker() uses a different cache key format
+            # (sha256(api_key)_include_feed_token) than the user-id based keys.
+            # Without clearing all entries, old cached tokens would persist and cause
+            # 401 Unauthorized errors after re-login.
+            # See GitHub issue #851 for details on this cache key mismatch bug.
             caches_cleared = []
 
             if cache_type in ("AUTH", "ALL"):
-                if cache_key_auth in auth_cache:
-                    del auth_cache[cache_key_auth]
-                    caches_cleared.append("auth_cache")
+                auth_cache.clear()
+                caches_cleared.append("auth_cache")
 
             if cache_type in ("FEED", "ALL"):
-                if cache_key_feed in feed_token_cache:
-                    del feed_token_cache[cache_key_feed]
-                    caches_cleared.append("feed_token_cache")
+                feed_token_cache.clear()
+                caches_cleared.append("feed_token_cache")
 
             if cache_type == "ALL":
-                # Clear broker cache for this user
-                if cache_key_auth in broker_cache:
-                    del broker_cache[cache_key_auth]
-                    caches_cleared.append("broker_cache")
+                broker_cache.clear()
+                caches_cleared.append("broker_cache")
 
-                # Clear any cached API key verifications for this user
-                # We can't easily identify which API key hashes belong to this user,
-                # so we clear all API key caches as a safety measure
-                # This is acceptable since the cache will repopulate on next request
                 verified_api_key_cache.clear()
                 invalid_api_key_cache.clear()
                 caches_cleared.append("verified_api_key_cache")
@@ -1306,6 +1462,9 @@ class WebSocketProxy:
                 if not self.running:
                     break
 
+                # RESOURCE CLEANUP: Periodically clean stale throttle entries
+                self._cleanup_stale_throttle_entries()
+
                 # OPTIMIZATION 1: Increased timeout to reduce busy-waiting
                 try:
                     [topic, data] = await aio.wait_for(
@@ -1330,45 +1489,44 @@ class WebSocketProxy:
                         logger.exception(f"Error handling cache invalidation: {e}")
                     continue  # Skip market data processing for cache messages
 
+                # Skip private account-level event topics (orders, positions, margins).
+                # These are published by broker adapters on the shared ZMQ socket but
+                # do not follow the BROKER_EXCHANGE_SYMBOL_MODE market-data format.
+                if topic_str.endswith(("_orders", "_positions", "_margins")):
+                    logger.debug(f"Skipping private event topic: {topic_str}")
+                    continue
+
                 market_data = json.loads(data_str)
 
-                # Extract topic components
-                # Support both formats:
-                # New format: BROKER_EXCHANGE_SYMBOL_MODE (with broker name)
-                # Old format: EXCHANGE_SYMBOL_MODE (without broker name)
-                # Special case: NSE_INDEX_SYMBOL_MODE (exchange contains underscore)
+                # Extract topic components from ZMQ topic string.
+                # All adapters publish: EXCHANGE_SYMBOL_MODE
+                # Mode (LTP/QUOTE/DEPTH) is always the LAST segment.
+                # Exchange is the first segment (NSE, BSE, NFO, MCX, CRYPTO, …)
+                #   except NSE_INDEX / BSE_INDEX which span two segments.
+                # Symbol is everything between exchange and mode — may contain
+                # underscores for crypto spot pairs (e.g. CRYPTO_SOL_INR_LTP).
                 parts = topic_str.split("_")
 
-                # Special case handling for NSE_INDEX and BSE_INDEX
-                if len(parts) >= 4 and parts[0] == "NSE" and parts[1] == "INDEX":
-                    broker_name = "unknown"
-                    exchange = "NSE_INDEX"
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 4 and parts[0] == "BSE" and parts[1] == "INDEX":
-                    broker_name = "unknown"
-                    exchange = "BSE_INDEX"
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 5 and parts[1] == "INDEX":  # BROKER_NSE_INDEX_SYMBOL_MODE format
-                    broker_name = parts[0]
-                    exchange = f"{parts[1]}_{parts[2]}"
-                    symbol = parts[3]
-                    mode_str = parts[4]
-                elif len(parts) >= 4:
-                    # Standard format with broker name
-                    broker_name = parts[0]
-                    exchange = parts[1]
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 3:
-                    # Old format without broker name
-                    broker_name = "unknown"
-                    exchange = parts[0]
-                    symbol = parts[1]
-                    mode_str = parts[2]
-                else:
+                if len(parts) < 3:
                     logger.warning(f"Invalid topic format: {topic_str}")
+                    continue
+
+                broker_name = "unknown"
+
+                # Mode is always the last segment
+                mode_str = parts[-1]
+                remaining = parts[:-1]  # everything except mode
+
+                # Detect NSE_INDEX / BSE_INDEX exchange prefix (two segments)
+                if len(remaining) >= 2 and remaining[0] in ("NSE", "BSE") and remaining[1] == "INDEX":
+                    exchange = f"{remaining[0]}_{remaining[1]}"
+                    symbol = "_".join(remaining[2:])
+                else:
+                    exchange = remaining[0]
+                    symbol = "_".join(remaining[1:])
+
+                if not symbol:
+                    logger.warning(f"Invalid topic format (no symbol): {topic_str}")
                     continue
 
                 # OPTIMIZATION: Use pre-computed mode map
@@ -1407,11 +1565,15 @@ class WebSocketProxy:
                     logger.debug(f"MarketDataService processing error: {mds_error}")
 
                 # OPTIMIZATION 2: O(1) lookup using subscription index
-                # Instead of iterating through ALL clients and ALL subscriptions (O(n²)),
-                # directly lookup clients subscribed to this specific (symbol, exchange, mode)
-                client_ids = self.subscription_index.get(sub_key, set()).copy()
+                # Higher modes include all lower-mode data (Depth > Quote > LTP),
+                # so also deliver to subscribers at lower modes.
+                # Maps client_id -> the mode they subscribed to (for correct message tagging)
+                all_client_modes = {}
+                for m in range(1, mode + 1):
+                    for cid in self.subscription_index.get((symbol, exchange, m), set()):
+                        all_client_modes[cid] = m
 
-                if not client_ids:
+                if not all_client_modes:
                     continue  # No WebSocket clients subscribed, skip delivery
 
                 # OPTIMIZATION 3: Batch message sends for parallel delivery
@@ -1427,11 +1589,7 @@ class WebSocketProxy:
                     "data": market_data,
                 }
 
-                # OPTIMIZATION 5: Pre-serialize JSON once (not per-client)
-                # Most clients get the same message, so serialize once
-                base_message_str = None
-
-                for client_id in client_ids:
+                for client_id, client_mode in all_client_modes.items():
                     # Verify client still exists
                     if client_id not in self.clients:
                         continue
@@ -1446,8 +1604,9 @@ class WebSocketProxy:
                     if broker_name != "unknown" and client_broker and client_broker != broker_name:
                         continue
 
-                    # Add broker to message
+                    # Tag message with client's subscribed mode so frontend renders correctly
                     message = base_message.copy()
+                    message["mode"] = client_mode
                     message["broker"] = broker_name if broker_name != "unknown" else client_broker
 
                     # Add to batch
@@ -1456,6 +1615,9 @@ class WebSocketProxy:
                 # Send all messages in parallel (non-blocking)
                 if send_tasks:
                     await aio.gather(*send_tasks, return_exceptions=True)
+
+                # METRICS: Track message count for health monitoring
+                self._messages_processed += 1
 
             except Exception as e:
                 logger.exception(f"Error in ZeroMQ listener: {e}")
@@ -1494,10 +1656,7 @@ async def main():
             logger.error(f"Runtime error: {e}")
             raise
     except Exception as e:
-        import traceback
-
-        error_details = traceback.format_exc()
-        logger.exception(f"Server error: {e}\n{error_details}")
+        logger.exception(f"Server error: {e}")
         raise
     finally:
         # Always clean up resources

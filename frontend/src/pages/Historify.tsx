@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -87,6 +87,7 @@ import { profileMenuItems } from '@/config/navigation'
 import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 
 // Types
 interface SearchResult {
@@ -249,6 +250,7 @@ export default function Historify() {
   const { appMode, toggleAppMode, mode, toggleMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
 
   // Core state
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
@@ -259,7 +261,7 @@ export default function Historify() {
     computed_intervals: string[]
     all_intervals: string[]
   } | null>(null)
-  const [exchanges, setExchanges] = useState<string[]>(['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NSE_INDEX', 'BSE_INDEX'])
+  const [exchanges, setExchanges] = useState<string[]>(['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NSE_INDEX', 'BSE_INDEX', 'CRYPTO'])
   const [stats, setStats] = useState<Stats>({ database_size_mb: 0, total_records: 0, total_symbols: 0, watchlist_count: 0 })
 
   // Tab state
@@ -329,6 +331,10 @@ export default function Historify() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ symbol: string; exchange: string; interval?: string } | null>(null)
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+  const [bulkWatchlistDeleteDialogOpen, setBulkWatchlistDeleteDialogOpen] = useState(false)
+  const [isBulkWatchlistDeleting, setIsBulkWatchlistDeleting] = useState(false)
 
   // Export dialog state
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
@@ -460,7 +466,7 @@ export default function Historify() {
       loadJobs()
       loadCatalog()
       loadStats()
-      toast.success(`Job completed: ${data.completed} success, ${data.failed} failed`)
+      showToast.success(`Job completed: ${data.completed} success, ${data.failed} failed`, 'historify')
     }
 
     const handleJobPaused = (data: { job_id: string }) => {
@@ -479,7 +485,7 @@ export default function Historify() {
         delete newProgress[data.job_id]
         return newProgress
       })
-      toast.info('Job cancelled')
+      showToast.info('Job cancelled', 'historify')
     }
 
     socket.on('historify_progress', handleProgress)
@@ -493,7 +499,7 @@ export default function Historify() {
     }
 
     const handleScheduleExecutionStarted = (data: { schedule_id: string; execution_id: number; job_id: string }) => {
-      toast.info(`Schedule execution started`)
+      showToast.info(`Schedule execution started`, 'historify')
       loadSchedules()
       loadJobs()
       if (expandedSchedule === data.schedule_id) {
@@ -567,7 +573,6 @@ export default function Historify() {
       const data = await response.json()
       if (data.status === 'success') setWatchlist(data.data || [])
     } catch (error) {
-      console.error('Error loading watchlist:', error)
     }
   }
 
@@ -577,7 +582,6 @@ export default function Historify() {
       const data = await response.json()
       if (data.status === 'success') setCatalog(data.data || [])
     } catch (error) {
-      console.error('Error loading catalog:', error)
     }
   }
 
@@ -587,7 +591,6 @@ export default function Historify() {
       const data = await response.json()
       if (data.status === 'success') setIntervals(data.data)
     } catch (error) {
-      console.error('Error loading intervals:', error)
     }
   }
 
@@ -603,7 +606,6 @@ export default function Historify() {
         })
       }
     } catch (error) {
-      console.error('Error loading historify intervals:', error)
     }
   }
 
@@ -613,7 +615,6 @@ export default function Historify() {
       const data = await response.json()
       if (data.status === 'success') setStats(data.data)
     } catch (error) {
-      console.error('Error loading stats:', error)
     }
   }
 
@@ -623,7 +624,6 @@ export default function Historify() {
       const data = await response.json()
       if (data.status === 'success' && data.data?.length > 0) setExchanges(data.data)
     } catch (error) {
-      console.error('Error loading exchanges:', error)
     }
   }
 
@@ -634,7 +634,6 @@ export default function Historify() {
       const data = await response.json()
       if (data.status === 'success') setJobs(data.data || [])
     } catch (error) {
-      console.error('Error loading jobs:', error)
     } finally {
       setJobsLoading(false)
     }
@@ -648,7 +647,6 @@ export default function Historify() {
       const data = await response.json()
       if (data.status === 'success') setSchedules(data.data || [])
     } catch (error) {
-      console.error('Error loading schedules:', error)
     } finally {
       setSchedulesLoading(false)
     }
@@ -662,7 +660,6 @@ export default function Historify() {
         setScheduleExecutions((prev) => ({ ...prev, [scheduleId]: data.data || [] }))
       }
     } catch (error) {
-      console.error('Error loading schedule executions:', error)
     }
   }
 
@@ -697,7 +694,7 @@ export default function Historify() {
 
   const handleCreateOrUpdateSchedule = async () => {
     if (!scheduleName.trim()) {
-      toast.warning('Please enter a schedule name')
+      showToast.warning('Please enter a schedule name', 'historify')
       return
     }
 
@@ -733,16 +730,15 @@ export default function Historify() {
       const data = await response.json()
 
       if (data.status === 'success') {
-        toast.success(editingSchedule ? 'Schedule updated' : 'Schedule created')
+        showToast.success(editingSchedule ? 'Schedule updated' : 'Schedule created', 'historify')
         setScheduleDialogOpen(false)
         resetScheduleForm()
         loadSchedules()
       } else {
-        toast.error(data.message || 'Failed to save schedule')
+        showToast.error(data.message || 'Failed to save schedule', 'historify')
       }
     } catch (error) {
-      console.error('Error saving schedule:', error)
-      toast.error('Failed to save schedule')
+      showToast.error('Failed to save schedule', 'historify')
     } finally {
       setIsCreatingSchedule(false)
     }
@@ -758,14 +754,13 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Schedule deleted')
+        showToast.success('Schedule deleted', 'historify')
         loadSchedules()
       } else {
-        toast.error(data.message || 'Failed to delete schedule')
+        showToast.error(data.message || 'Failed to delete schedule', 'historify')
       }
     } catch (error) {
-      console.error('Error deleting schedule:', error)
-      toast.error('Failed to delete schedule')
+      showToast.error('Failed to delete schedule', 'historify')
     }
   }
 
@@ -780,14 +775,13 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Schedule ${schedule.is_enabled ? 'disabled' : 'enabled'}`)
+        showToast.success(`Schedule ${schedule.is_enabled ? 'disabled' : 'enabled'}`, 'historify')
         loadSchedules()
       } else {
-        toast.error(data.message || 'Failed to toggle schedule')
+        showToast.error(data.message || 'Failed to toggle schedule', 'historify')
       }
     } catch (error) {
-      console.error('Error toggling schedule:', error)
-      toast.error('Failed to toggle schedule')
+      showToast.error('Failed to toggle schedule', 'historify')
     }
   }
 
@@ -802,14 +796,13 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Schedule ${schedule.is_paused ? 'resumed' : 'paused'}`)
+        showToast.success(`Schedule ${schedule.is_paused ? 'resumed' : 'paused'}`, 'historify')
         loadSchedules()
       } else {
-        toast.error(data.message || 'Failed to pause/resume schedule')
+        showToast.error(data.message || 'Failed to pause/resume schedule', 'historify')
       }
     } catch (error) {
-      console.error('Error pausing/resuming schedule:', error)
-      toast.error('Failed to pause/resume schedule')
+      showToast.error('Failed to pause/resume schedule', 'historify')
     }
   }
 
@@ -823,15 +816,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Schedule triggered')
+        showToast.success('Schedule triggered', 'historify')
         loadSchedules()
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to trigger schedule')
+        showToast.error(data.message || 'Failed to trigger schedule', 'historify')
       }
     } catch (error) {
-      console.error('Error triggering schedule:', error)
-      toast.error('Failed to trigger schedule')
+      showToast.error('Failed to trigger schedule', 'historify')
     }
   }
 
@@ -869,7 +861,6 @@ export default function Historify() {
       setSearchResults((data.results || []).slice(0, 10))
       setShowSearchResults(true)
     } catch (error) {
-      console.error('Error searching symbols:', error)
       setSearchResults([])
     }
   }
@@ -877,7 +868,7 @@ export default function Historify() {
   // Watchlist operations
   const addToWatchlist = async () => {
     if (!newSymbol.trim()) {
-      toast.warning('Please enter a symbol')
+      showToast.warning('Please enter a symbol', 'historify')
       return
     }
     try {
@@ -890,16 +881,15 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(data.message)
+        showToast.success(data.message, 'historify')
         setNewSymbol('')
         loadWatchlist()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to add symbol')
+        showToast.error(data.message || 'Failed to add symbol', 'historify')
       }
     } catch (error) {
-      console.error('Error adding to watchlist:', error)
-      toast.error('Failed to add symbol')
+      showToast.error('Failed to add symbol', 'historify')
     }
   }
 
@@ -914,15 +904,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(data.message)
+        showToast.success(data.message, 'historify')
         loadWatchlist()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to remove symbol')
+        showToast.error(data.message || 'Failed to remove symbol', 'historify')
       }
     } catch (error) {
-      console.error('Error removing from watchlist:', error)
-      toast.error('Failed to remove symbol')
+      showToast.error('Failed to remove symbol', 'historify')
     }
   }
 
@@ -936,7 +925,7 @@ export default function Historify() {
       .filter((s) => s.symbol)
 
     if (symbols.length === 0) {
-      toast.warning('No valid symbols found')
+      showToast.warning('No valid symbols found', 'historify')
       return
     }
 
@@ -951,17 +940,16 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Added ${data.added} symbols`)
+        showToast.success(`Added ${data.added} symbols`, 'historify')
         setBulkAddDialogOpen(false)
         setBulkAddText('')
         loadWatchlist()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to bulk add symbols')
+        showToast.error(data.message || 'Failed to bulk add symbols', 'historify')
       }
     } catch (error) {
-      console.error('Error bulk adding:', error)
-      toast.error('Failed to bulk add symbols')
+      showToast.error('Failed to bulk add symbols', 'historify')
     } finally {
       setIsBulkAdding(false)
     }
@@ -1000,7 +988,7 @@ export default function Historify() {
 
   // const loadFnoChain = async () => {
   //   if (!fnoSelectedUnderlying) {
-  //     toast.warning('Please select an underlying')
+  //     showToast.warning('Please select an underlying')
   //     return
   //   }
   //   setFnoLoading(true)
@@ -1016,13 +1004,13 @@ export default function Historify() {
   //     if (data.status === 'success') {
   //       setFnoSymbols(data.data || [])
   //       setFnoSelectedSymbols(new Set())
-  //       toast.success(`Found ${data.count} symbols`)
+  //       showToast.success(`Found ${data.count} symbols`)
   //     } else {
-  //       toast.error(data.message || 'Failed to load FNO chain')
+  //       showToast.error(data.message || 'Failed to load FNO chain')
   //     }
   //   } catch (error) {
   //     console.error('Error loading FNO chain:', error)
-  //     toast.error('Failed to load FNO chain')
+  //     showToast.error('Failed to load FNO chain')
   //   } finally {
   //     setFnoLoading(false)
   //   }
@@ -1031,7 +1019,7 @@ export default function Historify() {
   // Job operations
   const createDownloadJob = async (symbols: { symbol: string; exchange: string }[], jobType: string = 'custom') => {
     if (symbols.length === 0) {
-      toast.warning('No symbols selected')
+      showToast.warning('No symbols selected', 'historify')
       return
     }
     try {
@@ -1051,21 +1039,20 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Job started: ${data.total_symbols} symbols`)
+        showToast.success(`Job started: ${data.total_symbols} symbols`, 'historify')
         loadJobs()
         setActiveTab('jobs')
       } else {
-        toast.error(data.message || 'Failed to create job')
+        showToast.error(data.message || 'Failed to create job', 'historify')
       }
     } catch (error) {
-      console.error('Error creating job:', error)
-      toast.error('Failed to create job')
+      showToast.error('Failed to create job', 'historify')
     }
   }
 
   const downloadWatchlist = async () => {
     if (watchlist.length === 0) {
-      toast.warning('Watchlist is empty')
+      showToast.warning('Watchlist is empty', 'historify')
       return
     }
     const symbols = watchlist.map((item) => ({ symbol: item.symbol, exchange: item.exchange }))
@@ -1082,14 +1069,13 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Job paused')
+        showToast.success('Job paused', 'historify')
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to pause job')
+        showToast.error(data.message || 'Failed to pause job', 'historify')
       }
     } catch (error) {
-      console.error('Error pausing job:', error)
-      toast.error('Failed to pause job')
+      showToast.error('Failed to pause job', 'historify')
     }
   }
 
@@ -1103,14 +1089,13 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Job resumed')
+        showToast.success('Job resumed', 'historify')
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to resume job')
+        showToast.error(data.message || 'Failed to resume job', 'historify')
       }
     } catch (error) {
-      console.error('Error resuming job:', error)
-      toast.error('Failed to resume job')
+      showToast.error('Failed to resume job', 'historify')
     }
   }
 
@@ -1124,14 +1109,13 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Job cancellation requested')
+        showToast.success('Job cancellation requested', 'historify')
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to cancel job')
+        showToast.error(data.message || 'Failed to cancel job', 'historify')
       }
     } catch (error) {
-      console.error('Error cancelling job:', error)
-      toast.error('Failed to cancel job')
+      showToast.error('Failed to cancel job', 'historify')
     }
   }
 
@@ -1145,14 +1129,13 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Retrying ${data.retry_count} failed items`)
+        showToast.success(`Retrying ${data.retry_count} failed items`, 'historify')
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to retry job')
+        showToast.error(data.message || 'Failed to retry job', 'historify')
       }
     } catch (error) {
-      console.error('Error retrying job:', error)
-      toast.error('Failed to retry job')
+      showToast.error('Failed to retry job', 'historify')
     }
   }
 
@@ -1166,17 +1149,16 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Job deleted')
+        showToast.success('Job deleted', 'historify')
         loadJobs()
         if (selectedJob?.id === jobId) {
           setSelectedJob(null)
         }
       } else {
-        toast.error(data.message || 'Failed to delete job')
+        showToast.error(data.message || 'Failed to delete job', 'historify')
       }
     } catch (error) {
-      console.error('Error deleting job:', error)
-      toast.error('Failed to delete job')
+      showToast.error('Failed to delete job', 'historify')
     }
   }
 
@@ -1193,18 +1175,82 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(data.message)
+        showToast.success(data.message, 'historify')
         loadCatalog()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to delete data')
+        showToast.error(data.message || 'Failed to delete data', 'historify')
       }
     } catch (error) {
-      console.error('Error deleting data:', error)
-      toast.error('Failed to delete data')
+      showToast.error('Failed to delete data', 'historify')
     } finally {
       setDeleteDialogOpen(false)
       setDeleteTarget(null)
+    }
+  }
+
+  // Bulk delete data
+  const handleBulkDeleteData = async () => {
+    if (catalogSelectedSymbols.size === 0) return
+    setIsBulkDeleting(true)
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const symbols = Array.from(catalogSelectedSymbols).map((key) => {
+        const [symbol, exchange] = key.split(':')
+        return { symbol, exchange }
+      })
+      const response = await fetch('/historify/api/delete/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+        body: JSON.stringify({ symbols }),
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        showToast.success(data.message, 'historify')
+        setCatalogSelectedSymbols(new Set())
+        loadCatalog()
+        loadStats()
+      } else {
+        showToast.error(data.message || 'Failed to delete data', 'historify')
+      }
+    } catch (error) {
+      showToast.error('Failed to delete data', 'historify')
+    } finally {
+      setIsBulkDeleting(false)
+      setBulkDeleteDialogOpen(false)
+    }
+  }
+
+  // Bulk delete watchlist
+  const handleBulkWatchlistDelete = async () => {
+    if (watchlistSelectedSymbols.size === 0) return
+    setIsBulkWatchlistDeleting(true)
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const symbols = Array.from(watchlistSelectedSymbols).map((key) => {
+        const [symbol, exchange] = key.split(':')
+        return { symbol, exchange }
+      })
+      const response = await fetch('/historify/api/watchlist/bulk/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+        body: JSON.stringify({ symbols }),
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        showToast.success(data.message, 'historify')
+        setWatchlistSelectedSymbols(new Set())
+        loadWatchlist()
+      } else {
+        showToast.error(data.message || 'Failed to remove from watchlist', 'historify')
+      }
+    } catch (error) {
+      showToast.error('Failed to remove from watchlist', 'historify')
+    } finally {
+      setIsBulkWatchlistDeleting(false)
+      setBulkWatchlistDeleteDialogOpen(false)
     }
   }
 
@@ -1214,7 +1260,7 @@ export default function Historify() {
     if (file) {
       const fileName = file.name.toLowerCase()
       if (!fileName.endsWith('.csv') && !fileName.endsWith('.parquet')) {
-        toast.error('Please select a CSV or Parquet file')
+        showToast.error('Please select a CSV or Parquet file', 'historify')
         return
       }
       setUploadFile(file)
@@ -1223,11 +1269,11 @@ export default function Historify() {
 
   const uploadCSVData = async () => {
     if (!uploadFile) {
-      toast.warning('Please select a CSV or Parquet file')
+      showToast.warning('Please select a CSV or Parquet file', 'historify')
       return
     }
     if (!uploadSymbol.trim()) {
-      toast.warning('Please enter a symbol')
+      showToast.warning('Please enter a symbol', 'historify')
       return
     }
     setIsUploading(true)
@@ -1247,7 +1293,7 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`${data.message}`)
+        showToast.success(`${data.message}`, 'historify')
         setUploadDialogOpen(false)
         setUploadFile(null)
         setUploadSymbol('')
@@ -1255,11 +1301,10 @@ export default function Historify() {
         loadCatalog()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to upload data')
+        showToast.error(data.message || 'Failed to upload data', 'historify')
       }
     } catch (error) {
-      console.error('Error uploading CSV:', error)
-      toast.error('Failed to upload CSV')
+      showToast.error('Failed to upload CSV', 'historify')
     } finally {
       setIsUploading(false)
     }
@@ -1293,15 +1338,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`${data.message}`)
+        showToast.success(`${data.message}`, 'historify')
         window.location.href = '/historify/api/export/bulk/download'
         setExportDialogOpen(false)
       } else {
-        toast.error(data.message || 'Failed to export data')
+        showToast.error(data.message || 'Failed to export data', 'historify')
       }
     } catch (error) {
-      console.error('Error exporting data:', error)
-      toast.error('Failed to export data')
+      showToast.error('Failed to export data', 'historify')
     } finally {
       setIsExporting(false)
     }
@@ -1344,9 +1388,9 @@ export default function Historify() {
     const result = await toggleAppMode()
     if (result.success) {
       const newMode = useThemeStore.getState().appMode
-      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
+      showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`, 'system')
     } else {
-      toast.error(result.message || 'Failed to toggle mode')
+      showToast.error(result.message || 'Failed to toggle mode', 'system')
     }
   }
 
@@ -1355,7 +1399,7 @@ export default function Historify() {
       await authApi.logout()
       logout()
       navigate('/login')
-      toast.success('Logged out successfully')
+      showToast.success('Logged out successfully', 'system')
     } catch {
       logout()
       navigate('/login')
@@ -1508,7 +1552,7 @@ export default function Historify() {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={handleLogout}
+                  onClick={() => setShowLogoutDialog(true)}
                   className="text-destructive focus:text-destructive"
                 >
                   <LogOut className="h-4 w-4 mr-2" />
@@ -1519,6 +1563,12 @@ export default function Historify() {
           </div>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
 
       {/* Main Content */}
       <div className="flex-1 overflow-hidden">
@@ -1660,6 +1710,17 @@ export default function Historify() {
                         </SelectContent>
                       </Select>
                       <div className="flex gap-2">
+                        {catalogSelectedSymbols.size > 0 && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setBulkDeleteDialogOpen(true)}
+                            className="h-9"
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Delete ({catalogSelectedSymbols.size})
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -1984,6 +2045,16 @@ export default function Historify() {
                         )}
                       </CardTitle>
                       <div className="flex gap-2">
+                        {watchlistSelectedSymbols.size > 0 && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setBulkWatchlistDeleteDialogOpen(true)}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Delete ({watchlistSelectedSymbols.size})
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -2976,6 +3047,82 @@ NIFTY24DEC25000CE,NFO"
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDeleteData} className="bg-destructive text-destructive-foreground">
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {catalogSelectedSymbols.size} Symbol(s)</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete all data for the selected symbols? This will remove all historical data for:
+              <div className="mt-2 max-h-32 overflow-y-auto text-sm">
+                {Array.from(catalogSelectedSymbols).slice(0, 10).map((key) => (
+                  <div key={key} className="text-foreground">{key.replace(':', ' - ')}</div>
+                ))}
+                {catalogSelectedSymbols.size > 10 && (
+                  <div className="text-muted-foreground">...and {catalogSelectedSymbols.size - 10} more</div>
+                )}
+              </div>
+              <div className="mt-2 font-medium text-destructive">This action cannot be undone.</div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBulkDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDeleteData}
+              className="bg-destructive text-destructive-foreground"
+              disabled={isBulkDeleting}
+            >
+              {isBulkDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                `Delete ${catalogSelectedSymbols.size} Symbol(s)`
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Bulk Watchlist Delete Confirmation Dialog */}
+      <AlertDialog open={bulkWatchlistDeleteDialogOpen} onOpenChange={setBulkWatchlistDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {watchlistSelectedSymbols.size} Symbol(s) from Watchlist</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove the selected symbols from your watchlist?
+              <div className="mt-2 max-h-32 overflow-y-auto text-sm">
+                {Array.from(watchlistSelectedSymbols).slice(0, 10).map((key) => (
+                  <div key={key} className="text-foreground">{key.replace(':', ' - ')}</div>
+                ))}
+                {watchlistSelectedSymbols.size > 10 && (
+                  <div className="text-muted-foreground">...and {watchlistSelectedSymbols.size - 10} more</div>
+                )}
+              </div>
+              <div className="mt-2 text-muted-foreground text-sm">This will not delete any downloaded historical data.</div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBulkWatchlistDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkWatchlistDelete}
+              className="bg-destructive text-destructive-foreground"
+              disabled={isBulkWatchlistDeleting}
+            >
+              {isBulkWatchlistDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Removing...
+                </>
+              ) : (
+                `Remove ${watchlistSelectedSymbols.size} Symbol(s)`
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

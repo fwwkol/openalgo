@@ -67,7 +67,7 @@ class HistorifyScheduler:
                 )
                 self._scheduler.start()
                 self._initialized = True
-                logger.info("Historify Scheduler initialized and started")
+                logger.debug("Historify Scheduler initialized and started")
 
                 # Restore schedules from database on startup
                 self._restore_schedules()
@@ -435,7 +435,8 @@ class HistorifyScheduler:
             self.scheduler.remove_job(job_id)
             logger.debug(f"Removed job {job_id}")
             return True
-        except Exception:
+        except Exception as e:
+            logger.exception(f"Failed to remove job {job_id}: {e}")
             return False
 
     def get_job(self, job_id: str):
@@ -456,7 +457,8 @@ class HistorifyScheduler:
             self.scheduler.pause_job(job_id)
             logger.debug(f"Paused job {job_id}")
             return True
-        except Exception:
+        except Exception as e:
+            logger.exception(f"Failed to pause job {job_id}: {e}")
             return False
 
     def resume_job(self, job_id: str) -> bool:
@@ -465,7 +467,8 @@ class HistorifyScheduler:
             self.scheduler.resume_job(job_id)
             logger.debug(f"Resumed job {job_id}")
             return True
-        except Exception:
+        except Exception as e:
+            logger.exception(f"Failed to resume job {job_id}: {e}")
             return False
 
     def _emit_schedule_event(self, event: str, schedule_id: str, data: dict = None):

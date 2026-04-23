@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { authApi } from '@/api/auth'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -50,6 +50,7 @@ import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import {
   CandlestickSeries,
   ColorType,
@@ -85,6 +86,7 @@ export default function HistorifyCharts() {
   const { mode, toggleMode, appMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
   const isDarkMode = mode === 'dark' || appMode === 'analyzer'
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { symbol: urlSymbol } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -93,7 +95,7 @@ export default function HistorifyCharts() {
       await authApi.logout()
       logout()
       navigate('/login')
-      toast.success('Logged out successfully')
+      showToast.success('Logged out successfully', 'historify')
     } catch {
       logout()
       navigate('/login')
@@ -104,9 +106,9 @@ export default function HistorifyCharts() {
     const result = await toggleAppMode()
     if (result.success) {
       const newMode = useThemeStore.getState().appMode
-      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
+      showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`, 'historify')
     } else {
-      toast.error(result.message || 'Failed to toggle mode')
+      showToast.error(result.message || 'Failed to toggle mode', 'historify')
     }
   }
 
@@ -432,7 +434,6 @@ export default function HistorifyCharts() {
         setCatalog(data.data || [])
       }
     } catch (error) {
-      console.error('Error loading catalog:', error)
     }
   }
 
@@ -455,14 +456,13 @@ export default function HistorifyCharts() {
       if (data.status === 'success') {
         setChartData(data.data || [])
         if (data.count === 0) {
-          toast.info('No data available for this range. Make sure 1m data is downloaded for custom intervals.')
+          showToast.info('No data available for this range. Make sure 1m data is downloaded for custom intervals.', 'historify')
         }
       } else {
-        toast.error(data.message || 'Failed to load chart data')
+        showToast.error(data.message || 'Failed to load chart data', 'historify')
       }
     } catch (error) {
-      console.error('Error loading chart data:', error)
-      toast.error('Failed to load chart data')
+      showToast.error('Failed to load chart data', 'historify')
     } finally {
       setIsLoading(false)
     }
@@ -747,7 +747,7 @@ export default function HistorifyCharts() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleLogout}
+                onClick={() => setShowLogoutDialog(true)}
                 className="text-destructive focus:text-destructive"
               >
                 <LogOut className="h-4 w-4 mr-2" />
@@ -757,6 +757,12 @@ export default function HistorifyCharts() {
           </DropdownMenu>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
 
       {/* Chart Area */}
       <div className="flex-1 flex flex-col overflow-hidden p-4">

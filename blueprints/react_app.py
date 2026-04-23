@@ -185,9 +185,79 @@ def react_pnltracker():
     return serve_react_app()
 
 
+# Tools overview (Option Chain, IV Chart, etc.)
+@react_bp.route("/tools")
+def react_tools():
+    return serve_react_app()
+
+
+# IV Chart for options implied volatility
+@react_bp.route("/ivchart")
+def react_ivchart():
+    return serve_react_app()
+
+
+# OI Tracker for open interest analysis
+@react_bp.route("/oitracker")
+def react_oitracker():
+    return serve_react_app()
+
+
+# Max Pain analysis
+@react_bp.route("/maxpain")
+def react_maxpain():
+    return serve_react_app()
+
+
+# Straddle Chart - Dynamic ATM Straddle analysis
+@react_bp.route("/straddle")
+def react_straddle():
+    return serve_react_app()
+
+
+# Vol Surface - 3D Implied Volatility surface
+@react_bp.route("/volsurface")
+def react_volsurface():
+    return serve_react_app()
+
+
+# GEX Dashboard - Gamma Exposure analysis
+@react_bp.route("/gex")
+def react_gex():
+    return serve_react_app()
+
+
+# IV Smile - Implied Volatility smile curve
+@react_bp.route("/ivsmile")
+def react_ivsmile():
+    return serve_react_app()
+
+
+# OI Profile - Open Interest Profile with futures candles
+@react_bp.route("/oiprofile")
+def react_oiprofile():
+    return serve_react_app()
+
+
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():
+    return serve_react_app()
+
+
+# WebSocket depth test pages (broker dependent depth levels)
+@react_bp.route("/websocket/test/20")
+def react_websocket_test_20():
+    return serve_react_app()
+
+
+@react_bp.route("/websocket/test/30")
+def react_websocket_test_30():
+    return serve_react_app()
+
+
+@react_bp.route("/websocket/test/50")
+def react_websocket_test_50():
     return serve_react_app()
 
 
@@ -306,6 +376,12 @@ def react_admin_holidays():
 # Admin - Market Timings
 @react_bp.route("/admin/timings", strict_slashes=False)
 def react_admin_timings():
+    return serve_react_app()
+
+
+# Leverage Configuration (Crypto)
+@react_bp.route("/leverage", strict_slashes=False)
+def react_leverage():
     return serve_react_app()
 
 

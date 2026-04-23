@@ -37,9 +37,11 @@ class DhanWebSocket:
     TYPE_DEPTH_20_BID = 41  # 20-level depth bid data
     TYPE_DEPTH_20_ASK = 51  # 20-level depth ask data
 
-    # WebSocket URL constants
-    MARKET_FEED_WSS = "wss://api-feed.dhan.co"
-    DEPTH_20_FEED_WSS = "wss://depth-api-feed.dhan.co/twentydepth"
+    # WebSocket URL constants (env-overridable)
+    MARKET_FEED_WSS = os.getenv("DHAN_MARKET_FEED_WSS", "wss://api-feed.dhan.co")
+    DEPTH_20_FEED_WSS = os.getenv(
+        "DHAN_DEPTH20_FEED_WSS", "wss://depth-api-feed.dhan.co/twentydepth"
+    )
 
     # Mode constants for V2 API
     MODE_LTP = "ltp"  # LTP only
@@ -231,7 +233,7 @@ class DhanWebSocket:
 
             # Build connection URL (Dhan V2 format)
             ws_url = f"{self.MARKET_FEED_WSS}?version=2&token={self.access_token}&clientId={self.client_id}&authType=2"
-            logger.info(f"Connecting to WebSocket URL: {ws_url[:50]}...")
+            logger.info("Connecting to WebSocket endpoint: %s", self.MARKET_FEED_WSS)
 
             self.ws = await websockets.connect(
                 ws_url, ping_interval=30, ping_timeout=10, close_timeout=10, max_size=None
@@ -1918,7 +1920,7 @@ class DhanWebSocket:
         try:
             # Build connection URL - try without version parameter like in working example
             ws_url = f"{self.DEPTH_20_FEED_WSS}?token={self.access_token}&clientId={self.client_id}&authType=2"
-            logger.info(f"Connecting to 20-level depth endpoint: {ws_url[:50]}...")
+            logger.info("Connecting to 20-level depth endpoint: %s", self.DEPTH_20_FEED_WSS)
 
             # Connect using the same approach as the main WebSocket
             self.depth_20_ws = await websockets.connect(
@@ -2063,9 +2065,7 @@ class DhanWebSocket:
                 logger.error(f"msg_length parsed: {'msg_length' in locals()}")
                 logger.error(f"feed_code parsed: {'feed_code' in locals()}")
                 logger.error(f"token parsed: {'token' in locals()}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception("Error in 20-level depth message parsing")
                 return
             except Exception as e:
                 logger.error(f"Error processing 20-level depth message: {e}", exc_info=True)
@@ -2615,9 +2615,7 @@ class DhanWebSocket:
             except Exception as parse_error:
                 logger.error(f"Error parsing bid packets: {parse_error}")
                 logger.error(f"Error type: {type(parse_error).__name__}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception("Bid packet parsing traceback")
                 # Create empty depth data to avoid crashes
                 depth_data = []
 
@@ -2647,7 +2645,6 @@ class DhanWebSocket:
         except Exception as e:
             logger.error(f"Error handling 20-level bid data: {e}", exc_info=True)
             logger.error(f"Message hex: {message.hex()}")
-            logger.error(traceback.format_exc())
 
     def _handle_depth_20_ask(self, message, token=None):
         """Handle 20-level ask data (message type 51)"""
@@ -2781,9 +2778,7 @@ class DhanWebSocket:
             except Exception as parse_error:
                 logger.error(f"Error parsing ask packets: {parse_error}")
                 logger.error(f"Error type: {type(parse_error).__name__}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception("Ask packet parsing traceback")
                 # Create empty depth data to avoid crashes
                 depth_data = []
 
@@ -2811,11 +2806,8 @@ class DhanWebSocket:
                 self._check_and_send_depth_20(token)
 
         except Exception as e:
-            logger.error(f"Error handling 20-level ask data: {e}")
+            logger.exception(f"Error handling 20-level ask data: {e}")
             logger.error(f"Message hex: {message.hex()}")
-            import traceback
-
-            logger.error(traceback.format_exc())
 
     def _check_and_send_depth_20(self, token):
         """Check if we have both bid and ask data and send combined tick"""

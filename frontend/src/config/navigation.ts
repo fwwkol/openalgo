@@ -6,8 +6,10 @@ import {
   Code2,
   Database,
   FileBarChart,
+  FileStack,
   FileText,
   FlaskConical,
+  Gauge,
   Key,
   Layers,
   LayoutDashboard,
@@ -18,6 +20,7 @@ import {
   TrendingUp,
   User,
   Workflow,
+  Wrench,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -36,6 +39,7 @@ export const navItems: NavItem[] = [
   { href: '/platforms', label: 'Platforms', icon: Layers },
   { href: '/strategy', label: 'Strategy', icon: Code2 },
   { href: '/logs', label: 'Logs', icon: FileBarChart },
+  { href: '/tools', label: 'Tools', icon: Wrench },
 ]
 
 // Items shown in mobile bottom navigation
@@ -57,6 +61,7 @@ export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includ
 export const profileMenuItems: NavItem[] = [
   { href: '/profile', label: 'Profile', icon: User },
   { href: '/apikey', label: 'API Key', icon: Key },
+  { href: '/master-contract', label: 'Master Contract', icon: FileStack },
   { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
   { href: '/holdings', label: 'Holdings', icon: ClipboardList },
   { href: '/flow', label: 'Flow Editor', icon: Workflow },
@@ -65,6 +70,7 @@ export const profileMenuItems: NavItem[] = [
   { href: '/historify', label: 'Historify', icon: Database },
   { href: '/search/token', label: 'Search', icon: Search },
   { href: '/sandbox', label: 'Sandbox', icon: FlaskConical },
+  { href: '/leverage', label: 'Leverage', icon: Gauge },
   { href: '/admin', label: 'Admin', icon: Settings },
 ]
 

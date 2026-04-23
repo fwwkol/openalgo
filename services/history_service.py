@@ -1,5 +1,5 @@
 import importlib
-import traceback
+import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -11,6 +11,21 @@ from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+# Rate limiter: max 3 broker history API requests per second
+# Uses minimum interval between calls to prevent burst requests
+_last_history_call: float = 0.0
+_MIN_HISTORY_INTERVAL = 0.35  # 350ms between calls (~3 req/sec, evenly spaced)
+
+
+def _enforce_rate_limit():
+    """Block until enough time has passed since the last request (~3 per second)."""
+    global _last_history_call
+    now = time.monotonic()
+    elapsed = now - _last_history_call
+    if elapsed < _MIN_HISTORY_INTERVAL:
+        time.sleep(_MIN_HISTORY_INTERVAL - elapsed)
+    _last_history_call = time.monotonic()
 
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
@@ -122,8 +137,7 @@ def get_history_with_auth(
 
         return True, {"status": "success", "data": df.to_dict(orient="records")}, 200
     except Exception as e:
-        logger.error(f"Error in broker_module.get_history: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.get_history: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -198,8 +212,7 @@ def get_history_from_db(
         return True, {"status": "success", "data": df.to_dict(orient="records")}, 200
 
     except Exception as e:
-        logger.error(f"Error fetching history from DB: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error fetching history from DB: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -248,6 +261,9 @@ def get_history(
         )
 
     # Source: 'api' (default) - Fetch from broker API
+    # Enforce 3 requests/second rate limit for broker history calls
+    _enforce_rate_limit()
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, FEED_TOKEN, broker_name = get_auth_token_broker(

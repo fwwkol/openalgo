@@ -8,7 +8,6 @@ Note: The /historify page is served by react_app.py (React frontend).
 
 import os
 import tempfile
-import traceback
 
 from flask import Blueprint, Response, jsonify, request, send_file, session
 
@@ -35,8 +34,7 @@ def get_watchlist():
         success, response, status_code = service_get_watchlist()
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting watchlist: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting watchlist: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -55,8 +53,7 @@ def add_watchlist():
         success, response, status_code = add_to_watchlist(symbol, exchange, display_name)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error adding to watchlist: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error adding to watchlist: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -74,8 +71,27 @@ def remove_watchlist():
         success, response, status_code = remove_from_watchlist(symbol, exchange)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error removing from watchlist: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error removing from watchlist: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/watchlist/bulk/delete", methods=["POST"])
+@check_session_validity
+def bulk_remove_watchlist():
+    """Remove multiple symbols from the watchlist."""
+    try:
+        from services.historify_service import bulk_remove_from_watchlist
+
+        data = request.get_json()
+        symbols = data.get("symbols", [])
+
+        if not symbols:
+            return jsonify({"status": "error", "message": "No symbols provided"}), 400
+
+        success, response, status_code = bulk_remove_from_watchlist(symbols)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.exception(f"Error bulk removing from watchlist: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -92,8 +108,7 @@ def bulk_add_watchlist():
         success, response, status_code = bulk_add_to_watchlist(symbols)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error bulk adding to watchlist: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error bulk adding to watchlist: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -139,8 +154,7 @@ def download_data():
         )
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error downloading data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error downloading data: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -174,8 +188,7 @@ def download_watchlist():
         )
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error downloading watchlist data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error downloading watchlist data: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -206,8 +219,7 @@ def get_chart_data():
         )
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting chart data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting chart data: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -221,8 +233,7 @@ def get_catalog():
         success, response, status_code = get_data_catalog()
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting catalog: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting catalog: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -240,8 +251,7 @@ def get_symbol_info():
         success, response, status_code = get_symbol_data_info(symbol, exchange, interval)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting symbol info: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting symbol info: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -282,8 +292,7 @@ def export_data():
 
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error exporting data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error exporting data: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -334,8 +343,7 @@ def download_export():
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except Exception as e:
-        logger.error(f"Error downloading export: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error downloading export: {e}")
         # Clean up file on error
         if file_path and os.path.exists(file_path):
             try:
@@ -385,8 +393,7 @@ def get_export_preview():
 
         return jsonify({"status": "success", "data": preview}), 200
     except Exception as e:
-        logger.error(f"Error getting export preview: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting export preview: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -417,6 +424,10 @@ def bulk_export():
         end_date = data.get("end_date")
         split_by = data.get("split_by", "symbol")  # For ZIP: 'symbol' or 'none'
         compression = data.get("compression", "zstd")  # For Parquet
+        # Validate compression against allowlist to prevent SQL injection
+        VALID_COMPRESSIONS = ["zstd", "snappy", "gzip", "none"]
+        if compression not in VALID_COMPRESSIONS:
+            compression = "zstd"
 
         # Validate intervals parameter using parse_interval for dynamic validation
         from database.historify_db import parse_interval
@@ -529,8 +540,7 @@ def bulk_export():
         ), 200
 
     except Exception as e:
-        logger.error(f"Error in bulk export: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in bulk export: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -580,8 +590,7 @@ def download_bulk_export():
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except Exception as e:
-        logger.error(f"Error downloading bulk export: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error downloading bulk export: {e}")
         # Clean up file on error
         if file_path and os.path.exists(file_path):
             try:
@@ -619,8 +628,7 @@ def get_intervals():
         success, response, status_code = get_supported_timeframes(api_key)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting intervals: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting intervals: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -634,8 +642,7 @@ def get_historify_intervals():
         success, response, status_code = service_get_intervals()
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting historify intervals: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting historify intervals: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -649,8 +656,7 @@ def get_exchanges():
         success, response, status_code = service_get_exchanges()
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting exchanges: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting exchanges: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -664,8 +670,7 @@ def get_stats():
         success, response, status_code = service_get_stats()
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting stats: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting stats: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -684,8 +689,27 @@ def delete_data():
         success, response, status_code = delete_symbol_data(symbol, exchange, interval)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error deleting data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error deleting data: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/delete/bulk", methods=["POST"])
+@check_session_validity
+def bulk_delete_data():
+    """Delete data for multiple symbols in bulk."""
+    try:
+        from services.historify_service import bulk_delete_symbol_data
+
+        data = request.get_json()
+        symbols = data.get("symbols", [])
+
+        if not symbols:
+            return jsonify({"status": "error", "message": "No symbols provided"}), 400
+
+        success, response, status_code = bulk_delete_symbol_data(symbols)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.exception(f"Error bulk deleting data: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -769,8 +793,7 @@ def upload_data():
                 os.remove(temp_path)
 
     except Exception as e:
-        logger.error(f"Error uploading data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error uploading data: {e}")
         # Clean up temp file on error
         if temp_file and os.path.exists(temp_file.name):
             os.remove(temp_file.name)
@@ -844,8 +867,7 @@ def get_fno_underlyings():
         success, response, status_code = service_get_underlyings(exchange)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting FNO underlyings: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting FNO underlyings: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -868,8 +890,7 @@ def get_fno_expiries():
         success, response, status_code = service_get_expiries(underlying, exchange, instrumenttype)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting FNO expiries: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting FNO expiries: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -902,8 +923,7 @@ def get_fno_chain():
         )
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting FNO chain: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting FNO chain: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -923,8 +943,7 @@ def get_futures_chain():
         success, response, status_code = service_get_futures(underlying, exchange)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting futures chain: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting futures chain: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -953,8 +972,7 @@ def get_option_chain():
         )
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting option chain: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting option chain: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -976,8 +994,7 @@ def get_jobs():
         success, response, status_code = get_all_jobs(status, limit)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting jobs: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting jobs: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1025,8 +1042,7 @@ def create_job():
         )
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error creating job: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error creating job: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1040,8 +1056,7 @@ def get_job_status(job_id):
         success, response, status_code = service_get_job_status(job_id)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting job status: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting job status: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1055,8 +1070,7 @@ def cancel_job(job_id):
         success, response, status_code = service_cancel_job(job_id)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error cancelling job: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error cancelling job: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1070,8 +1084,7 @@ def pause_job(job_id):
         success, response, status_code = service_pause_job(job_id)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error pausing job: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error pausing job: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1085,8 +1098,7 @@ def resume_job_endpoint(job_id):
         success, response, status_code = service_resume_job(job_id)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error resuming job: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error resuming job: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1113,8 +1125,7 @@ def retry_job(job_id):
         success, response, status_code = retry_failed_items(job_id, api_key)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error retrying job: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error retrying job: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1128,8 +1139,7 @@ def delete_job(job_id):
         success, response, status_code = service_delete_job(job_id)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error deleting job: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error deleting job: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1152,8 +1162,7 @@ def get_catalog_grouped():
         success, response, status_code = get_catalog_grouped_service(group_by)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting grouped catalog: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting grouped catalog: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1167,8 +1176,7 @@ def get_catalog_with_metadata():
         success, response, status_code = get_catalog_with_metadata_service()
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error getting catalog with metadata: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting catalog with metadata: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1188,8 +1196,7 @@ def enrich_metadata():
         success, response, status_code = enrich_and_save_metadata(symbols)
         return jsonify(response), status_code
     except Exception as e:
-        logger.error(f"Error enriching metadata: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error enriching metadata: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1217,8 +1224,7 @@ def get_schedules():
 
         return jsonify({"status": "success", "data": schedules, "count": len(schedules)}), 200
     except Exception as e:
-        logger.error(f"Error getting schedules: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting schedules: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1312,8 +1318,7 @@ def create_schedule():
             return jsonify({"status": "error", "message": msg}), 400
 
     except Exception as e:
-        logger.error(f"Error creating schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error creating schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1339,8 +1344,7 @@ def get_schedule(schedule_id):
         return jsonify({"status": "success", "data": schedule}), 200
 
     except Exception as e:
-        logger.error(f"Error getting schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1405,8 +1409,7 @@ def update_schedule(schedule_id):
             return jsonify({"status": "error", "message": msg}), 400
 
     except Exception as e:
-        logger.error(f"Error updating schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error updating schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1426,8 +1429,7 @@ def delete_schedule(schedule_id):
             return jsonify({"status": "error", "message": msg}), 400
 
     except Exception as e:
-        logger.error(f"Error deleting schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error deleting schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1447,8 +1449,7 @@ def enable_schedule(schedule_id):
             return jsonify({"status": "error", "message": msg}), 400
 
     except Exception as e:
-        logger.error(f"Error enabling schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error enabling schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1468,8 +1469,7 @@ def disable_schedule(schedule_id):
             return jsonify({"status": "error", "message": msg}), 400
 
     except Exception as e:
-        logger.error(f"Error disabling schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error disabling schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1489,8 +1489,7 @@ def pause_schedule(schedule_id):
             return jsonify({"status": "error", "message": msg}), 400
 
     except Exception as e:
-        logger.error(f"Error pausing schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error pausing schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1510,8 +1509,7 @@ def resume_schedule(schedule_id):
             return jsonify({"status": "error", "message": msg}), 400
 
     except Exception as e:
-        logger.error(f"Error resuming schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error resuming schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1531,8 +1529,7 @@ def trigger_schedule(schedule_id):
             return jsonify({"status": "error", "message": msg}), 400
 
     except Exception as e:
-        logger.error(f"Error triggering schedule: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error triggering schedule: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1549,6 +1546,5 @@ def get_schedule_executions(schedule_id):
         return jsonify({"status": "success", "data": executions, "count": len(executions)}), 200
 
     except Exception as e:
-        logger.error(f"Error getting executions: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error getting executions: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500

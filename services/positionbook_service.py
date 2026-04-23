@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -31,13 +30,20 @@ def format_position_data(position_data):
         "daybuyqty",
         "daysellqty",
     }
+    # Fields that must preserve full float precision (must NOT be rounded to 2dp).
+    # lot_size can be as small as 0.001 (BTCUSD.P) — rounding to 2dp gives 0.0.
+    passthrough_fields = {"lot_size"}
 
     if isinstance(position_data, list):
         return [
             {
-                key: int(value)
-                if (key.lower() in quantity_fields and isinstance(value, (int, float)))
-                else (format_decimal(value) if isinstance(value, (int, float)) else value)
+                key: value
+                if key.lower() in passthrough_fields
+                else (
+                    (int(value) if value == int(value) else value)
+                    if (key.lower() in quantity_fields and isinstance(value, (int, float)))
+                    else (format_decimal(value) if isinstance(value, (int, float)) else value)
+                )
                 for key, value in item.items()
             }
             for item in position_data
@@ -135,8 +141,7 @@ def get_positionbook_with_auth(
 
         return True, {"status": "success", "data": formatted_positions}, 200
     except Exception as e:
-        logger.error(f"Error processing positions data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error processing positions data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 

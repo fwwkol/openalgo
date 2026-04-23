@@ -41,10 +41,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENALGO_DIR="$SCRIPT_DIR"
 
 # XTS Brokers that require market data credentials
-XTS_BROKERS="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
+XTS_BROKERS="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
 
 # Valid brokers list
-VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
 
 # Banner
 echo ""
@@ -192,10 +192,10 @@ do_setup() {
     echo ""
     echo "  Valid brokers:"
     echo "  fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,"
-    echo "  definedge, dhan, dhan_sandbox, firstock, flattrade, fyers,"
-    echo "  groww, ibulls, iifl, indmoney, jainamxts, kotak, motilal,"
-    echo "  mstock, paytm, pocketful, samco, shoonya, tradejini,"
-    echo "  upstox, wisdom, zebu, zerodha"
+    echo "  definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,"
+    echo "  groww, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,"
+    echo "  mstock, nubra, paytm, pocketful, rmoney, samco, shoonya,"
+    echo "  tradejini, upstox, wisdom, zebu, zerodha"
     echo ""
 
     # Get broker name with validation
@@ -371,13 +371,58 @@ do_start() {
     docker stop "$CONTAINER" >/dev/null 2>&1
     docker rm "$CONTAINER" >/dev/null 2>&1
 
+    # Calculate dynamic resource limits based on available RAM
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        TOTAL_RAM_MB=$(($(sysctl -n hw.memsize) / 1024 / 1024))
+        CPU_CORES=$(sysctl -n hw.ncpu 2>/dev/null || echo 2)
+    else
+        TOTAL_RAM_MB=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024))
+        CPU_CORES=$(nproc 2>/dev/null || echo 2)
+    fi
+
+    # shm_size: 25% of RAM (min 256MB, max 2GB)
+    SHM_SIZE_MB=$((TOTAL_RAM_MB / 4))
+    [ $SHM_SIZE_MB -lt 256 ] && SHM_SIZE_MB=256
+    [ $SHM_SIZE_MB -gt 2048 ] && SHM_SIZE_MB=2048
+
+    # Thread limits based on RAM (prevents RLIMIT_NPROC exhaustion)
+    # <3GB: 1 thread | 3-6GB: 2 threads | 6GB+: min(4, cores)
+    # See: https://github.com/marketcalls/openalgo/issues/822
+    if [ $TOTAL_RAM_MB -lt 3000 ]; then
+        THREAD_LIMIT=1
+    elif [ $TOTAL_RAM_MB -lt 6000 ]; then
+        THREAD_LIMIT=2
+    else
+        THREAD_LIMIT=$((CPU_CORES < 4 ? CPU_CORES : 4))
+    fi
+
+    # Strategy memory limit based on RAM
+    # <3GB: 256MB | 3-6GB: 512MB | 6GB+: 1024MB
+    if [ $TOTAL_RAM_MB -lt 3000 ]; then
+        STRATEGY_MEM_LIMIT=256
+    elif [ $TOTAL_RAM_MB -lt 6000 ]; then
+        STRATEGY_MEM_LIMIT=512
+    else
+        STRATEGY_MEM_LIMIT=1024
+    fi
+
+    log_info "System: ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} cores"
+    log_info "Config: shm=${SHM_SIZE_MB}MB, threads=${THREAD_LIMIT}, strategy_mem=${STRATEGY_MEM_LIMIT}MB"
+
     # Run container
     log_info "Starting container..."
     if docker run -d \
         --name "$CONTAINER" \
-        --shm-size=2g \
+        --shm-size=${SHM_SIZE_MB}m \
         -p 5000:5000 \
         -p 8765:8765 \
+        -e "OPENBLAS_NUM_THREADS=${THREAD_LIMIT}" \
+        -e "OMP_NUM_THREADS=${THREAD_LIMIT}" \
+        -e "MKL_NUM_THREADS=${THREAD_LIMIT}" \
+        -e "NUMEXPR_NUM_THREADS=${THREAD_LIMIT}" \
+        -e "NUMBA_NUM_THREADS=${THREAD_LIMIT}" \
+        -e "STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEM_LIMIT}" \
+        -e "TZ=Asia/Kolkata" \
         -v "$OPENALGO_DIR/db:/app/db" \
         -v "$OPENALGO_DIR/strategies:/app/strategies" \
         -v "$OPENALGO_DIR/log:/app/log" \
@@ -520,7 +565,7 @@ do_help() {
     echo "  - Logs:       $OPENALGO_DIR/log/"
     echo ""
     echo "XTS Brokers (require market data credentials):"
-    echo "  fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom"
+    echo "  fivepaisaxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom"
     echo ""
 }
 

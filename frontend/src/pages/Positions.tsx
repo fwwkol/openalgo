@@ -1,9 +1,11 @@
 import {
+  AlertTriangle,
   ArrowUpDown,
   ChevronDown,
   ChevronRight,
   Download,
   Loader2,
+  Pause,
   Radio,
   RefreshCw,
   Settings2,
@@ -11,9 +13,11 @@ import {
   TrendingUp,
   X,
 } from 'lucide-react'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { toast } from 'sonner'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import { showToast } from '@/utils/toast'
 import { tradingApi } from '@/api/trading'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,8 +52,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useLivePrice } from '@/hooks/useLivePrice'
-import { cn, sanitizeCSV } from '@/lib/utils'
+import { usePageVisibility } from '@/hooks/usePageVisibility'
+import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 
@@ -68,14 +74,6 @@ interface FilterState {
 interface Preferences {
   grouping: GroupingType
   filters: FilterState
-}
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    minimumFractionDigits: 2,
-  }).format(value)
 }
 
 function parseSymbol(symbol: string, exchange: string) {
@@ -105,7 +103,6 @@ function calculatePnlPercent(position: Position): number {
   const avgPrice = Number(position.average_price) || 0
   const qty = Number(position.quantity) || 0
   const pnl = Number(position.pnl) || 0
-  const ltp = Number(position.ltp) || 0
 
   // Use API-provided pnlpercent if available
   if (position.pnlpercent !== undefined && position.pnlpercent !== null) {
@@ -120,23 +117,9 @@ function calculatePnlPercent(position: Position): number {
     return investment > 0 ? (pnl / investment) * 100 : 0
   }
 
-  // For flat positions (qty=0), derive from P&L and price movement
-  // If we have P&L and price difference, calculate the implied percentage
-  if (ltp > 0 && pnl !== 0) {
-    const priceDiff = ltp - avgPrice
-    if (priceDiff !== 0) {
-      // Derive implied quantity from P&L and price difference
-      const impliedQty = Math.abs(pnl / priceDiff)
-      const investment = avgPrice * impliedQty
-      return investment > 0 ? (pnl / investment) * 100 : 0
-    }
-  }
-
-  // Fallback: price change percentage
-  if (ltp > 0) {
-    return ((ltp - avgPrice) / avgPrice) * 100
-  }
-
+  // For closed positions (qty=0), return 0% like Zerodha
+  // We cannot reliably calculate P&L% without knowing the original quantity
+  // The P&L amount is still shown correctly from the API
   return 0
 }
 
@@ -156,11 +139,18 @@ const PRODUCT_COLORS: Record<string, string> = {
 }
 
 export default function Positions() {
-  const { apiKey } = useAuthStore()
+  const { apiKey, user } = useAuthStore()
+  const { isCrypto } = useSupportedExchanges()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [positions, setPositions] = useState<Position[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showStaleWarning, setShowStaleWarning] = useState(false)
+
+  // Page visibility tracking for resource optimization
+  const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
+  const lastFetchRef = useRef<number>(Date.now())
 
   // Filter and grouping state
   const [grouping, setGrouping] = useState<GroupingType>('none')
@@ -175,11 +165,13 @@ export default function Positions() {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
-  const { data: enhancedPositions, isLive } = useLivePrice(positions, {
+  // Automatically pauses when tab is hidden
+  const { data: enhancedPositions, isLive, isPaused } = useLivePrice(positions, {
     enabled: positions.length > 0,
     useMultiQuotesFallback: true,
     staleThreshold: 5000,
     multiQuotesRefreshInterval: 30000,
+    pauseWhenHidden: true,
   })
 
   // Load preferences from localStorage
@@ -197,7 +189,6 @@ export default function Positions() {
           })
       }
     } catch (e) {
-      console.error('Error loading preferences:', e)
     }
   }, [])
 
@@ -237,14 +228,41 @@ export default function Positions() {
     [apiKey]
   )
 
-  // Initial fetch and polling
+  // Initial fetch and visibility-aware polling
+  // Pauses polling when tab is hidden to save resources
   useEffect(() => {
+    // Don't poll when tab is hidden
+    if (!isVisible) return
+
     fetchPositions()
-    // Reduce polling interval when live (WebSocket connected AND market open)
-    const intervalMs = isLive ? 30000 : 10000
-    const interval = setInterval(() => fetchPositions(), intervalMs)
-    return () => clearInterval(interval)
-  }, [fetchPositions, isLive])
+    lastFetchRef.current = Date.now()
+  }, [fetchPositions, isVisible])
+
+  // Refresh on order events instead of polling
+  useOrderEventRefresh(fetchPositions, {
+    events: ['order_event', 'analyzer_update', 'close_position_event'],
+  })
+
+  // Refresh data when tab becomes visible after being hidden
+  useEffect(() => {
+    if (!wasHidden || !isVisible) return
+
+    const timeSinceLastFetch = Date.now() - lastFetchRef.current
+
+    // If hidden for more than 30 seconds, show stale warning and refresh
+    if (timeSinceHidden > 30000 || timeSinceLastFetch > 30000) {
+      setShowStaleWarning(true)
+      fetchPositions()
+      lastFetchRef.current = Date.now()
+    }
+  }, [wasHidden, isVisible, timeSinceHidden, fetchPositions])
+
+  // Auto-dismiss stale data warning after 5 seconds
+  useEffect(() => {
+    if (!showStaleWarning) return
+    const timeout = setTimeout(() => setShowStaleWarning(false), 5000)
+    return () => clearTimeout(timeout)
+  }, [showStaleWarning])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -361,9 +379,10 @@ export default function Positions() {
 
   // Calculate stats
   const stats = useMemo(() => {
-    const total = filteredPositions.length
     const long = filteredPositions.filter((p) => (p.quantity || 0) > 0).length
     const short = filteredPositions.filter((p) => (p.quantity || 0) < 0).length
+    // Only count positions with non-zero quantity as "open"
+    const total = long + short
     const totalPnl = filteredPositions.reduce((sum, p) => sum + (p.pnl || 0), 0)
     return { total, long, short, totalPnl }
   }, [filteredPositions])
@@ -420,14 +439,16 @@ export default function Positions() {
         position.product
       )
       if (response.status === 'success') {
-        // Toast handled by order_event socket
+        showToast.success(
+          response.message || `Position closed for ${position.symbol}`,
+          'positions'
+        )
         fetchPositions(true)
       } else {
-        toast.error(response.message || 'Failed to close position')
+        showToast.error(response.message || 'Failed to close position', 'positions')
       }
     } catch (err) {
-      console.error('Close position error:', err)
-      toast.error('Failed to close position')
+      showToast.error('Failed to close position', 'positions')
     }
   }
 
@@ -435,46 +456,58 @@ export default function Positions() {
     try {
       const response = await tradingApi.closeAllPositions()
       if (response.status === 'success') {
-        toast.success('All positions closed')
+        // Toast handled by close_position_event socket
         fetchPositions(true)
       } else {
-        toast.error(response.message || 'Failed to close all positions')
+        showToast.error(response.message || 'Failed to close all positions', 'positions')
       }
     } catch (err) {
-      console.error('Close all positions error:', err)
-      toast.error('Failed to close all positions')
+      showToast.error('Failed to close all positions', 'positions')
     }
   }
 
   const exportToCSV = () => {
-    const headers = [
-      'Symbol',
-      'Exchange',
-      'Product',
-      'Quantity',
-      'Avg Price',
-      'LTP',
-      'P&L',
-      'P&L %',
-    ]
-    const rows = filteredPositions.map((p) => [
-      sanitizeCSV(p.symbol),
-      sanitizeCSV(p.exchange),
-      sanitizeCSV(p.product),
-      sanitizeCSV(p.quantity),
-      sanitizeCSV(p.average_price),
-      sanitizeCSV(p.ltp),
-      sanitizeCSV(p.pnl),
-      sanitizeCSV(calculatePnlPercent(p)),
-    ])
+    if (filteredPositions.length === 0) {
+      showToast.error('No data to export', 'system')
+      return
+    }
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `positions_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
+    try {
+      const headers = [
+        'Symbol',
+        'Exchange',
+        ...(isCrypto ? [] : ['Product']),
+        'Quantity',
+        'Avg Price',
+        'LTP',
+        'P&L',
+        'P&L %',
+      ]
+      const rows = filteredPositions.map((p) => [
+        sanitizeCSV(p.symbol),
+        sanitizeCSV(p.exchange),
+        ...(isCrypto ? [] : [sanitizeCSV(p.product)]),
+        sanitizeCSV(p.quantity),
+        sanitizeCSV(p.average_price),
+        sanitizeCSV(p.ltp),
+        sanitizeCSV(p.pnl),
+        sanitizeCSV(calculatePnlPercent(p)),
+      ])
+
+      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `positions_${new Date().toISOString().split('T')[0]}.csv`
+      a.download = filename
+      a.click()
+      // Revoke the object URL to free memory
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
   }
 
   const isProfit = (value: number) => value >= 0
@@ -551,12 +584,30 @@ export default function Positions() {
 
   return (
     <div className="space-y-6">
+      {/* Stale Data Warning */}
+      {showStaleWarning && (
+        <Alert variant="default" className="bg-amber-500/10 border-amber-500/30">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-700 dark:text-amber-400">
+            Data is being refreshed after tab was inactive...
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Positions</h1>
-            {isLive && (
+            {isPaused ? (
+              <Badge
+                variant="outline"
+                className="bg-amber-500/10 text-amber-600 border-amber-500/30 gap-1"
+              >
+                <Pause className="h-3 w-3" />
+                Paused
+              </Badge>
+            ) : isLive ? (
               <Badge
                 variant="outline"
                 className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 gap-1"
@@ -564,7 +615,7 @@ export default function Positions() {
                 <Radio className="h-3 w-3 animate-pulse" />
                 Live
               </Badge>
-            )}
+            ) : null}
           </div>
           <p className="text-muted-foreground">Monitor and manage your active trading positions</p>
         </div>
@@ -632,6 +683,7 @@ export default function Positions() {
                 <div className="border-t" />
 
                 {/* Product Type */}
+                {!isCrypto && (
                 <div className="space-y-3">
                   <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Product Type
@@ -642,6 +694,7 @@ export default function Positions() {
                     <FilterChip type="product" value="NRML" label="NRML" />
                   </div>
                 </div>
+                )}
 
                 {/* Direction */}
                 <div className="space-y-3">
@@ -696,7 +749,7 @@ export default function Positions() {
 
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={positions.length === 0}>
+              <Button variant="destructive" size="sm" disabled={stats.total === 0}>
                 <X className="h-4 w-4 mr-2" />
                 Close All
               </Button>
@@ -705,7 +758,7 @@ export default function Positions() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Close All Positions?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will close all {positions.length} open positions at market price. This action
+                  This will close all {stats.total} open positions at market price. This action
                   cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -727,7 +780,7 @@ export default function Positions() {
               Grouped: {grouping === 'underlying' ? 'Underlying' : 'Underlying & Expiry'}
             </Badge>
           )}
-          {filters.product.map((v) => (
+          {!isCrypto && filters.product.map((v) => (
             <Badge
               key={v}
               variant="secondary"
@@ -825,7 +878,7 @@ export default function Positions() {
                   <TableRow>
                     <SortableHeader column={0} label="Symbol" className="w-[140px]" />
                     <TableHead className="w-[80px]">Exchange</TableHead>
-                    <TableHead className="w-[80px]">Product</TableHead>
+                    {!isCrypto && <TableHead className="w-[80px]">Product</TableHead>}
                     <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
                     <SortableHeader column={4} label="Avg Price" className="w-[120px] text-right" />
                     <TableHead className="w-[120px] text-right">LTP</TableHead>
@@ -868,7 +921,7 @@ export default function Positions() {
                               )}
                             >
                               {groupStats.totalPnl >= 0 ? '+' : ''}
-                              {groupStats.totalPnl.toFixed(2)}
+                              {formatCurrency(groupStats.totalPnl)}
                             </TableCell>
                             <TableCell
                               className={cn(
@@ -898,6 +951,7 @@ export default function Positions() {
                                   {position.exchange}
                                 </Badge>
                               </TableCell>
+                              {!isCrypto && (
                               <TableCell className="w-[80px]">
                                 <Badge
                                   variant="outline"
@@ -906,6 +960,7 @@ export default function Positions() {
                                   {position.product}
                                 </Badge>
                               </TableCell>
+                              )}
                               <TableCell
                                 className={cn(
                                   'w-[80px] text-right font-medium',
@@ -952,6 +1007,7 @@ export default function Positions() {
                                   size="sm"
                                   className="text-destructive hover:text-destructive hover:bg-destructive/10"
                                   onClick={() => handleClosePosition(position)}
+                                  aria-label={`Close ${position.symbol} position`}
                                 >
                                   <X className="h-4 w-4" />
                                 </Button>

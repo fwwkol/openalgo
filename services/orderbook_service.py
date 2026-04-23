@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -38,9 +37,9 @@ def format_order_data(order_data):
             formatted_item = {}
             for key, value in item.items():
                 if isinstance(value, (int, float)):
-                    # Keep quantity fields as integers
+                    # Keep quantity fields as integers when whole, preserve float for fractional (crypto spot)
                     if key.lower() in quantity_fields:
-                        formatted_item[key] = int(value)
+                        formatted_item[key] = int(value) if value == int(value) else value
                     else:
                         formatted_item[key] = format_decimal(value)
                 else:
@@ -176,8 +175,7 @@ def get_orderbook_with_auth(
             200,
         )
     except Exception as e:
-        logger.error(f"Error processing order data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error processing order data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 

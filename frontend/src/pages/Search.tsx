@@ -1,7 +1,7 @@
 import { ArrowUpDown, ChevronLeft, ChevronRight, Copy, Search as SearchIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -29,6 +29,7 @@ interface SearchResult {
   brexchange: string
   token: string
   lotsize: number | null
+  contract_value: number | null
   freeze_qty: number | null
 }
 
@@ -49,6 +50,7 @@ export default function Search() {
   const [searchParams] = useSearchParams()
   const [results, setResults] = useState<SearchResult[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [currentPage, setCurrentPage] = useState(1)
@@ -61,6 +63,7 @@ export default function Search() {
 
   const fetchResults = async () => {
     setIsLoading(true)
+    setError(null)
     try {
       // Build URL with all search params - use the API endpoint
       const params = new URLSearchParams()
@@ -89,11 +92,18 @@ export default function Search() {
       if (response.ok) {
         const data = await response.json()
         setResults(data.results || [])
+      } else if (response.status === 401 || response.status === 403) {
+        setError('Session expired. Please log in again.')
+        showToast.error('Session expired. Please log in again.', 'system')
+        setResults([])
       } else {
+        setError('Search failed. Please try again.')
+        showToast.error('Failed to search symbols', 'system')
         setResults([])
       }
-    } catch (error) {
-      console.error('Search error:', error)
+    } catch (err) {
+      setError('Failed to search symbols. Please check your connection.')
+      showToast.error('Failed to search symbols', 'system')
       setResults([])
     } finally {
       setIsLoading(false)
@@ -104,10 +114,10 @@ export default function Search() {
     navigator.clipboard
       .writeText(text)
       .then(() => {
-        toast.success('Symbol copied to clipboard')
+        showToast.success('Symbol copied to clipboard', 'clipboard')
       })
       .catch(() => {
-        toast.error('Failed to copy symbol')
+        showToast.error('Failed to copy symbol', 'clipboard')
       })
   }
 
@@ -221,7 +231,11 @@ export default function Search() {
                 {paginatedResults.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      No results found
+                      {error ? (
+                        <span className="text-destructive">{error}</span>
+                      ) : (
+                        'No results found'
+                      )}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -252,7 +266,7 @@ export default function Search() {
                         <Badge variant="secondary">{row.brexchange}</Badge>
                       </TableCell>
                       <TableCell className="font-mono text-sm">{row.token}</TableCell>
-                      <TableCell>{row.lotsize ?? '-'}</TableCell>
+                      <TableCell>{row.contract_value != null && row.contract_value !== 1 ? row.contract_value : (row.lotsize ?? '-')}</TableCell>
                       <TableCell>{row.freeze_qty ?? '-'}</TableCell>
                     </TableRow>
                   ))

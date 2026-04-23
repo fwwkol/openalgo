@@ -12,7 +12,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import duckdb
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -71,6 +70,8 @@ def get_connection(max_retries: int = 3, retry_delay: float = 0.5):
 
     for attempt in range(max_retries):
         try:
+            import duckdb
+
             conn = duckdb.connect(db_path)
             break
         except Exception as e:
@@ -424,6 +425,72 @@ def remove_from_watchlist(symbol: str, exchange: str) -> tuple[bool, str]:
     except Exception as e:
         logger.exception(f"Error removing from watchlist: {e}")
         return False, str(e)
+
+
+def bulk_remove_from_watchlist(
+    symbols: list[dict[str, str]],
+) -> tuple[int, int, list[dict[str, str]]]:
+    """
+    Remove multiple symbols from the watchlist in a single transaction.
+
+    Args:
+        symbols: List of dicts with 'symbol' and 'exchange' keys
+
+    Returns:
+        Tuple of (removed_count, skipped_count, failed_list)
+    """
+    removed = 0
+    skipped = 0
+    failed = []
+
+    try:
+        with get_connection() as conn:
+            # Get existing symbols in one query
+            existing_result = conn.execute("""
+                SELECT symbol, exchange FROM watchlist
+            """).fetchall()
+            existing_set = {(row[0], row[1]) for row in existing_result}
+
+            for item in symbols:
+                symbol = item.get("symbol", "").upper()
+                exchange = item.get("exchange", "").upper()
+
+                if not symbol or not exchange:
+                    failed.append({
+                        "symbol": symbol or "MISSING",
+                        "exchange": exchange or "MISSING",
+                        "error": "Missing symbol or exchange",
+                    })
+                    continue
+
+                # Check if exists
+                if (symbol, exchange) not in existing_set:
+                    skipped += 1
+                    continue
+
+                try:
+                    conn.execute(
+                        """
+                        DELETE FROM watchlist
+                        WHERE symbol = ? AND exchange = ?
+                        """,
+                        [symbol, exchange],
+                    )
+                    removed += 1
+                    existing_set.discard((symbol, exchange))
+                except Exception as e:
+                    failed.append({
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "error": str(e),
+                    })
+
+        logger.info(f"Bulk watchlist remove: {removed} removed, {skipped} skipped, {len(failed)} failed")
+        return removed, skipped, failed
+
+    except Exception as e:
+        logger.exception(f"Error in bulk remove from watchlist: {e}")
+        return 0, 0, [{"symbol": "ALL", "exchange": "ALL", "error": str(e)}]
 
 
 def clear_watchlist() -> tuple[bool, str]:
@@ -1213,6 +1280,79 @@ def delete_market_data(symbol: str, exchange: str, interval: str | None = None) 
         return False, str(e)
 
 
+def bulk_delete_market_data(
+    symbols: list[dict[str, str]],
+) -> tuple[int, int, list[dict[str, str]]]:
+    """
+    Delete market data for multiple symbols in a single transaction.
+
+    Args:
+        symbols: List of dicts with 'symbol' and 'exchange' keys
+
+    Returns:
+        Tuple of (deleted_count, skipped_count, failed_list)
+    """
+    deleted = 0
+    skipped = 0
+    failed = []
+
+    try:
+        with get_connection() as conn:
+            for item in symbols:
+                symbol = item.get("symbol", "").upper()
+                exchange = item.get("exchange", "").upper()
+
+                if not symbol or not exchange:
+                    failed.append({
+                        "symbol": symbol or "MISSING",
+                        "exchange": exchange or "MISSING",
+                        "error": "Missing symbol or exchange",
+                    })
+                    continue
+
+                try:
+                    # Delete from market_data
+                    result = conn.execute(
+                        """
+                        DELETE FROM market_data
+                        WHERE symbol = ? AND exchange = ?
+                        """,
+                        [symbol, exchange],
+                    )
+                    rows_deleted = result.rowcount if hasattr(result, 'rowcount') else 0
+
+                    # Delete from data_catalog
+                    conn.execute(
+                        """
+                        DELETE FROM data_catalog
+                        WHERE symbol = ? AND exchange = ?
+                        """,
+                        [symbol, exchange],
+                    )
+
+                    if rows_deleted > 0:
+                        deleted += 1
+                        logger.info(f"Bulk delete: Deleted {symbol}:{exchange}")
+                    else:
+                        skipped += 1
+                        logger.debug(f"Bulk delete: No data found for {symbol}:{exchange}")
+
+                except Exception as e:
+                    failed.append({
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "error": str(e),
+                    })
+                    logger.error(f"Bulk delete: Failed to delete {symbol}:{exchange}: {e}")
+
+        logger.info(f"Bulk delete completed: {deleted} deleted, {skipped} skipped, {len(failed)} failed")
+        return deleted, skipped, failed
+
+    except Exception as e:
+        logger.exception(f"Error in bulk delete market data: {e}")
+        return 0, 0, [{"symbol": "ALL", "exchange": "ALL", "error": str(e)}]
+
+
 # =============================================================================
 # Export Operations
 # =============================================================================
@@ -1376,7 +1516,7 @@ def vacuum_database():
 
 
 # Supported exchanges (these are static across brokers)
-SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX"]
+SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX", "CRYPTO"]
 
 
 def get_supported_intervals(api_key: str) -> list[str]:

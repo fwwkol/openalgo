@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -31,7 +30,7 @@ def format_trade_data(trade_data):
     if isinstance(trade_data, list):
         return [
             {
-                key: int(value)
+                key: (int(value) if value == int(value) else value)
                 if (key.lower() in quantity_fields and isinstance(value, (int, float)))
                 else (format_decimal(value) if isinstance(value, (int, float)) else value)
                 for key, value in item.items()
@@ -131,8 +130,7 @@ def get_tradebook_with_auth(
 
         return True, {"status": "success", "data": formatted_trades}, 200
     except Exception as e:
-        logger.error(f"Error processing trade data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error processing trade data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 

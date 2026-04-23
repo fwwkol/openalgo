@@ -1,7 +1,7 @@
 import { Eye, EyeOff, Github, Info, Loader2, LogIn, MessageCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -58,7 +58,6 @@ export default function Login() {
         }
         // If session check fails (401, etc.), just stay on login page
       } catch (err) {
-        console.error('Failed to check setup status:', err)
       } finally {
         setIsCheckingSetup(false)
       }
@@ -78,7 +77,6 @@ export default function Login() {
       })
 
       if (!csrfResponse.ok) {
-        console.error('CSRF fetch failed:', csrfResponse.status, csrfResponse.statusText)
         setError('Failed to initialize login. Please refresh the page.')
         setIsLoading(false)
         return
@@ -102,7 +100,6 @@ export default function Login() {
       // Check content type before parsing
       const contentType = response.headers.get('content-type')
       if (!contentType || !contentType.includes('application/json')) {
-        console.error('Login response is not JSON:', contentType)
         // If redirected to setup page, inform user
         if (response.url.includes('/setup')) {
           setError('Please complete initial setup first.')
@@ -116,21 +113,19 @@ export default function Login() {
 
       const data = await response.json()
 
-      if (data.status === 'error') {
+      if (!response.ok || data.status === 'error') {
         setError(data.message || 'Login failed. Please try again.')
-        // Handle redirect for setup
         if (data.redirect) {
           navigate(data.redirect)
         }
       } else {
-        // Set login state (broker will be set after broker selection)
-        setLogin(username, '')
-        toast.success('Login successful')
+        // Set login state (broker from response if session was resumed, empty otherwise)
+        setLogin(username, data.broker || '')
+        showToast.success('Login successful', 'system')
         // Use redirect from response if provided, otherwise go to broker
         navigate(data.redirect || '/broker')
       }
     } catch (err) {
-      console.error('Login error:', err)
       setError('Login failed. Please try again.')
     } finally {
       setIsLoading(false)

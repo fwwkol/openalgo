@@ -14,6 +14,8 @@ instance/
 Thumbs.db
 .vscode/
 .idea/
+.claude/settings.json
+.claude/settings.local.json
 .python-version
 config.ini
 .venvv
@@ -21,11 +23,20 @@ config.ini
 
 #DB Files, CSV Files and Log/Tmp Files
 
+# Temporary/debug files
+tmp/
+
+# Numba/LLVMLITE cache directories (auto-created on Linux)
+.numba_cache/
+.llvm_tmp/
+
 *.egg-info/
 *.db
 *.duckdb
+*.duckdb.wal
 *.sqlite
 *.log
+*.jsonl
 *.tmp
 checkpoint.txt
 checkpoints.json

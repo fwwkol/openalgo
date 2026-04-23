@@ -4,10 +4,88 @@ import sys
 from dotenv import load_dotenv
 
 
-def check_env_version_compatibility():
+def configure_llvmlite_paths() -> None:
     """
-    Check if .env file version matches .sample.env version
-    Returns True if compatible, False if update needed
+    Configure LLVMLITE/NUMBA paths to avoid 'failed to map segment' errors.
+
+    On hardened Linux servers, /tmp is often mounted with the 'noexec' flag,
+    which prevents llvmlite from loading its shared library.
+
+    This sets alternative directories for llvmlite/numba cache and temp files.
+    Must be called BEFORE any imports that might trigger llvmlite loading.
+
+    Returns:
+        None
+    """
+    # Only configure on Linux (Windows/macOS don't have this issue)
+    if sys.platform != 'linux':
+        return
+
+    # Get the base directory (project root)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # Create cache directories in project folder
+    numba_cache = os.path.join(base_dir, '.numba_cache')
+    llvm_tmp = os.path.join(base_dir, '.llvm_tmp')
+
+    # Set environment variables if not already set
+    if 'NUMBA_CACHE_DIR' not in os.environ:
+        os.environ['NUMBA_CACHE_DIR'] = numba_cache
+
+    if 'LLVMLITE_TMPDIR' not in os.environ:
+        os.environ['LLVMLITE_TMPDIR'] = llvm_tmp
+
+    # Create directories if they don't exist
+    for dir_path in [numba_cache, llvm_tmp]:
+        if not os.path.exists(dir_path):
+            try:
+                os.makedirs(dir_path, exist_ok=True)
+            except OSError:
+                pass  # Ignore if can't create, will fail later with better error
+
+    # Check if /tmp has noexec and warn
+    check_tmp_noexec()
+
+
+def check_tmp_noexec() -> None:
+    """
+    Check if /tmp is mounted with the noexec flag and print a warning.
+
+    This helps users understand why llvmlite might fail to load.
+    """
+    if sys.platform != 'linux':
+        return
+
+    try:
+        with open('/proc/mounts', 'r') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 4 and parts[1] == '/tmp':
+                    mount_options = parts[3].split(',')
+                    if 'noexec' in mount_options:
+                        print("\n" + "=" * 70)
+                        print("⚠️  WARNING: /tmp is mounted with 'noexec' flag")
+                        print("   This can cause issues with Python libraries like numba/llvmlite.")
+                        print("")
+                        print("   OpenAlgo has auto-configured alternative paths:")
+                        print(f"   - NUMBA_CACHE_DIR={os.environ.get('NUMBA_CACHE_DIR', 'not set')}")
+                        print(f"   - LLVMLITE_TMPDIR={os.environ.get('LLVMLITE_TMPDIR', 'not set')}")
+                        print("")
+                        print("   If you still see 'failed to map segment' errors, either:")
+                        print("   1. Remount /tmp: sudo mount -o remount,exec /tmp")
+                        print("   2. Or set NUMBA_DISABLE_JIT=1 in your .env file")
+                        print("=" * 70 + "\n")
+                    return
+    except (OSError, IOError):
+        pass  # Can't read /proc/mounts, skip the check
+
+
+def check_env_version_compatibility() -> bool:
+    """
+    Check if the .env file version matches the .sample.env version.
+
+    Returns:
+        bool: True if compatible, False if an update is needed.
     """
     base_dir = os.path.dirname(__file__) + "/.."
     env_path = os.path.join(base_dir, ".env")
@@ -64,9 +142,17 @@ def check_env_version_compatibility():
     # Compare versions using simple string comparison for semantic versions
     try:
 
-        def version_tuple(v):
-            """Convert version string to tuple of integers for comparison"""
-            return tuple(map(int, v.split(".")))
+        def version_tuple(v: str) -> tuple:
+            """
+            Convert version string to tuple of integers for comparison.
+            
+            Args:
+                v (str): Version string (e.g. '1.5.0').
+            
+            Returns:
+                tuple: Tuple of integers (e.g. (1, 5, 0)).
+            """
+            return tuple(int(x) for x in v.split('.'))
 
         env_ver = version_tuple(env_version)
         sample_ver = version_tuple(sample_version)
@@ -120,8 +206,18 @@ def check_env_version_compatibility():
     return True
 
 
-def load_and_check_env_variables():
-    # First, check version compatibility
+def load_and_check_env_variables() -> None:
+    """
+    Load environment variables from .env and check for required critical variables.
+
+    Raises:
+        SystemExit: If the .env file is missing or required variables are not set.
+    """
+    # Configure LLVMLITE/NUMBA paths FIRST (before any imports can trigger loading)
+    # This fixes "failed to map segment from shared object" on hardened Linux servers
+    configure_llvmlite_paths()
+
+    # Check version compatibility
     if not check_env_version_compatibility():
         sys.exit(1)
 
@@ -159,7 +255,6 @@ def load_and_check_env_variables():
         "SMART_ORDER_RATE_LIMIT",  # Rate limit for smart order placement
         "WEBHOOK_RATE_LIMIT",  # Rate limit for webhook endpoints
         "STRATEGY_RATE_LIMIT",  # Rate limit for strategy operations
-        "SMART_ORDER_DELAY",
         "SESSION_EXPIRY_TIME",  # Added SESSION_EXPIRY_TIME as it's required for session management
         "WEBSOCKET_HOST",  # Host for the WebSocket server
         "WEBSOCKET_PORT",  # Port for the WebSocket server
@@ -336,14 +431,20 @@ def load_and_check_env_variables():
         "WEBHOOK_RATE_LIMIT",
         "STRATEGY_RATE_LIMIT",
     ]
-    rate_limit_pattern = re.compile(r"^\d+\s+per\s+(second|minute|hour|day)$")
+    # Single: "10 per second"
+    # Compound (Flask-Limiter syntax): "10 per second;40 per minute"
+    single_limit = r"\d+\s+per\s+(second|minute|hour|day)"
+    rate_limit_pattern = re.compile(
+        rf"^{single_limit}(;{single_limit})*$"
+    )
 
     for var in rate_limit_vars:
         value = os.getenv(var, "")
         if not rate_limit_pattern.match(value):
             print(f"\nError: Invalid {var} format.")
             print("Format should be: 'number per timeunit'")
-            print("Example: '5 per minute', '10 per second'")
+            print("Compound limits use semicolons: 'number per timeunit;number per timeunit'")
+            print("Examples: '5 per minute', '10 per second', '10 per second;40 per minute'")
             sys.exit(1)
 
     # Validate SESSION_EXPIRY_TIME format (24-hour format)
@@ -353,16 +454,6 @@ def load_and_check_env_variables():
         print("\nError: Invalid SESSION_EXPIRY_TIME format.")
         print("Format should be 24-hour time (HH:MM)")
         print("Example: '03:00', '15:30'")
-        sys.exit(1)
-
-    # Validate SMART_ORDER_DELAY is a valid float
-    try:
-        delay = float(os.getenv("SMART_ORDER_DELAY", "0"))
-        if delay < 0:
-            raise ValueError
-    except ValueError:
-        print("\nError: SMART_ORDER_DELAY must be a valid positive number")
-        print("Example: SMART_ORDER_DELAY='0.5'")
         sys.exit(1)
 
     # Validate WEBSOCKET_URL format

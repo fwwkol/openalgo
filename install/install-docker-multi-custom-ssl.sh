@@ -47,13 +47,13 @@ generate_hex() {
 
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
-    [[ $valid_brokers == *"$broker"* ]]
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
 is_xts_broker() {
     local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
+    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
     if [[ ",$xts_brokers," == *",$broker,"* ]]; then
         return 0
     else
@@ -429,6 +429,45 @@ done
 
 log "\n=== Starting Deployment ===" "$BLUE"
 
+# Calculate dynamic resource limits based on system specs and number of instances
+TOTAL_RAM_MB=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024))
+CPU_CORES=$(nproc 2>/dev/null || echo 2)
+NUM_INSTANCES=${#CONF_DOMAINS[@]}
+
+# Calculate per-instance RAM (divide total by number of instances)
+RAM_PER_INSTANCE=$((TOTAL_RAM_MB / NUM_INSTANCES))
+log "System: ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} cores, ${NUM_INSTANCES} instances" "$BLUE"
+log "Per-instance allocation: ~${RAM_PER_INSTANCE}MB" "$BLUE"
+
+# shm_size: 25% of per-instance RAM (min 128MB, max 1GB for multi-instance)
+SHM_SIZE_MB=$((RAM_PER_INSTANCE / 4))
+[ $SHM_SIZE_MB -lt 128 ] && SHM_SIZE_MB=128
+[ $SHM_SIZE_MB -gt 1024 ] && SHM_SIZE_MB=1024
+
+# Thread limits based on per-instance RAM (conservative)
+# <2GB: 1 thread | 2-4GB: 2 threads | 4GB+: max(2, min(4, cores/instances))
+if [ $RAM_PER_INSTANCE -lt 2000 ]; then
+    THREAD_LIMIT=1
+elif [ $RAM_PER_INSTANCE -lt 4000 ]; then
+    THREAD_LIMIT=2
+else
+    CORES_PER_INSTANCE=$((CPU_CORES / NUM_INSTANCES))
+    THREAD_LIMIT=$((CORES_PER_INSTANCE < 2 ? 2 : CORES_PER_INSTANCE))
+    [ $THREAD_LIMIT -gt 4 ] && THREAD_LIMIT=4
+fi
+
+# Strategy memory limit based on per-instance RAM
+# <2GB: 256MB | 2-4GB: 512MB | 4GB+: 1024MB
+if [ $RAM_PER_INSTANCE -lt 2000 ]; then
+    STRATEGY_MEM_LIMIT=256
+elif [ $RAM_PER_INSTANCE -lt 4000 ]; then
+    STRATEGY_MEM_LIMIT=512
+else
+    STRATEGY_MEM_LIMIT=1024
+fi
+
+log "Config: shm=${SHM_SIZE_MB}MB, threads=${THREAD_LIMIT}, strategy_mem=${STRATEGY_MEM_LIMIT}MB" "$BLUE"
+
 # Base Dir
 mkdir -p "$INSTALL_BASE"
 chmod 755 "$INSTALL_BASE"
@@ -769,12 +808,14 @@ for i in "${!CONF_DOMAINS[@]}"; do
             fi
         fi
         
-        # CSP: Add domain if not already present (preserves custom domains)
+        # CSP: Add domain if not already present (delete-and-append avoids sed regex issues with nested quotes)
+        # See: https://github.com/marketcalls/openalgo/issues/938
         if ! grep "CSP_CONNECT_SRC" "$ENV_FILE" | grep -q "https://$DOMAIN"; then
-            CURRENT_CSP=$(grep "CSP_CONNECT_SRC" "$ENV_FILE" | sed 's/.*= "\\(.*\\)"/\\1/')
+            CURRENT_CSP=$(grep "^CSP_CONNECT_SRC" "$ENV_FILE" | sed 's/^CSP_CONNECT_SRC *= *//; s/^"//; s/"$//')
             if [ -n "$CURRENT_CSP" ] && ! echo "$CURRENT_CSP" | grep -q "https://$DOMAIN"; then
                 NEW_CSP="$CURRENT_CSP https://$DOMAIN wss://$DOMAIN"
-                sed -i "s|CSP_CONNECT_SRC = \".*\"|CSP_CONNECT_SRC = \"$NEW_CSP\"|g" "$ENV_FILE"
+                sed -i '/^CSP_CONNECT_SRC/d' "$ENV_FILE"
+                echo "CSP_CONNECT_SRC = \"$NEW_CSP\"" >> "$ENV_FILE"
             fi
         fi
         
@@ -801,11 +842,17 @@ for i in "${!CONF_DOMAINS[@]}"; do
         
         # Connectivity
         sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
+        # WEBSOCKET_HOST / FLASK_HOST_IP bind to 0.0.0.0 inside the container so
+        # the Docker port mapping can route traffic from the host's nginx.
         sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" "$ENV_FILE"
-        sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" "$ENV_FILE"
         sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" "$ENV_FILE"
+        # ZMQ_HOST stays on loopback: internal message bus, same-container only.
+        # Exposing it would leak the raw tick feed.
         sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" "$ENV_FILE"
-        sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" "$ENV_FILE"
+        # CSP: Set connect sources with domain (delete-and-append avoids sed regex issues with nested quotes)
+        # See: https://github.com/marketcalls/openalgo/issues/938
+        sed -i '/^CSP_CONNECT_SRC/d' "$ENV_FILE"
+        echo "CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"" >> "$ENV_FILE"
         
         log "New .env created with fresh security keys" "$GREEN"
     fi
@@ -834,7 +881,15 @@ services:
       - FLASK_DEBUG=0
       - APP_MODE=standalone
       - TZ=Asia/Kolkata
-    shm_size: '2gb'
+      # Resource limits auto-calculated for multi-instance deployment
+      # See: https://github.com/marketcalls/openalgo/issues/822
+      - OPENBLAS_NUM_THREADS=${THREAD_LIMIT}
+      - OMP_NUM_THREADS=${THREAD_LIMIT}
+      - MKL_NUM_THREADS=${THREAD_LIMIT}
+      - NUMEXPR_NUM_THREADS=${THREAD_LIMIT}
+      - NUMBA_NUM_THREADS=${THREAD_LIMIT}
+      - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEM_LIMIT}
+    shm_size: '${SHM_SIZE_MB}m'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
       interval: 30s
@@ -911,6 +966,21 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_read_timeout 86400s;
+    }
+
+    # Logic: Socket.IO (Flask-SocketIO real-time events)
+    location /socket.io/ {
+        proxy_pass http://openalgo_flask_${SANITIZED_NAME}/socket.io/;
+        proxy_http_version 1.1;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering off;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
     # Logic: Main App

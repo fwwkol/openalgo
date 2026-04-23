@@ -3,11 +3,9 @@ Dhan WebSocket Adapter for OpenAlgo
 Manages both 5-level and 20-level depth connections
 """
 
-import asyncio
 import json
 import logging
 import os
-import platform
 import sys
 import threading
 import time
@@ -144,33 +142,72 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def connect(self) -> None:
         """Establish connections to Dhan WebSocket endpoints"""
-        if not self.ws_client_5depth or not self.ws_client_20depth:
+        if not self.ws_client_5depth:
             self.logger.error("WebSocket clients not initialized. Call initialize() first.")
             return
 
-        # Connect to 5-depth endpoint
+        # Connect only the 5-depth endpoint (always needed)
         self.logger.debug("Connecting to Dhan 5-depth WebSocket...")
         self.ws_client_5depth.connect()
 
-        # Connect to 20-depth endpoint
-        self.logger.debug("Connecting to Dhan 20-depth WebSocket...")
-        self.ws_client_20depth.connect()
+        # 20-depth WebSocket is connected lazily on first 20-depth subscription
+        # to avoid wasting Dhan's 5-connection-per-user limit
 
     def disconnect(self) -> None:
-        """Disconnect from Dhan WebSocket endpoints"""
+        """Disconnect from Dhan WebSocket endpoints with proper resource cleanup"""
+        self.logger.debug("Starting Dhan adapter disconnect sequence...")
         self.running = False
+        self.connected = False
 
-        if self.ws_client_5depth:
-            self.ws_client_5depth.disconnect()
+        # Store references but clear them AFTER cleanup completes (not before).
+        # Clearing before cleanup creates a window under eventlet where another
+        # greenlet can see ws_client_5depth=None while the old connection is
+        # still being torn down, causing reused adapters to silently drop subscribes.
+        ws_5depth = self.ws_client_5depth
+        ws_20depth = self.ws_client_20depth
 
-        if self.ws_client_20depth:
-            self.ws_client_20depth.disconnect()
+        try:
+            # Disconnect 5-depth WebSocket
+            if ws_5depth:
+                try:
+                    ws_5depth.cleanup()
+                    self.logger.debug("5-depth WebSocket disconnected and cleaned up")
+                except Exception as e:
+                    self.logger.debug(f"Error disconnecting 5-depth WebSocket: {e}")
 
-        # Clean up ZeroMQ resources
-        self.cleanup_zmq()
+            # Disconnect 20-depth WebSocket
+            if ws_20depth:
+                try:
+                    ws_20depth.cleanup()
+                    self.logger.debug("20-depth WebSocket disconnected and cleaned up")
+                except Exception as e:
+                    self.logger.debug(f"Error disconnecting 20-depth WebSocket: {e}")
 
-        # Stop fallback monitor
-        self.stop_fallback_monitor()
+            # Stop fallback monitor thread
+            self._stop_fallback_monitor_internal()
+
+            # Clear WebSocket references AFTER cleanup is done
+            self.ws_client_5depth = None
+            self.ws_client_20depth = None
+
+            # Clear all state for clean reconnection
+            with self.lock:
+                self.subscriptions_5depth.clear()
+                self.subscriptions_20depth.clear()
+                self.subscriptions.clear()
+                self.depth_20_accumulator.clear()
+                self.depth_20_timeouts.clear()
+                self.depth_20_data_received.clear()
+                self.depth_20_fallbacks.clear()
+
+            self.logger.debug("Dhan adapter state cleared")
+
+        finally:
+            # Always clean up ZeroMQ resources
+            try:
+                self.cleanup_zmq()
+            except Exception as e:
+                self.logger.warning(f"ZMQ cleanup error: {e}")
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
@@ -302,6 +339,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.depth_20_timeouts[correlation_id] = time.time() + 30
                 # Reset data received timestamp
                 self.depth_20_data_received[correlation_id] = time.time()
+
+            # Lazy-connect the 20-depth WebSocket on first demand
+            if self.ws_client_20depth and not self.ws_client_20depth.connected and not self.ws_client_20depth.running:
+                self.logger.info("Lazy-connecting Dhan 20-depth WebSocket (first 20-depth subscription)")
+                self.ws_client_20depth.connect()
 
             # Subscribe if connected
             if self.ws_client_20depth and self.ws_client_20depth.connected:
@@ -440,54 +482,49 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def unsubscribe_all(self) -> dict[str, Any]:
         """
-        Unsubscribe from all subscriptions and disconnect from WebSocket
+        Unsubscribe from all subscriptions without disconnecting.
+
+        Clears all subscription tracking and sends unsubscribe messages to Dhan,
+        but keeps the WebSocket connections alive so future subscribes work
+        without needing to reconnect.
 
         Returns:
             Dict: Response with status
         """
-        unsubscribed_count = 0
-
-        # Stop fallback monitor first
-        self.stop_fallback_monitor()
-
         with self.lock:
-            # Count total subscriptions before clearing
             unsubscribed_count = len(self.subscriptions_5depth) + len(self.subscriptions_20depth)
 
-            # Clear all subscriptions
+            # Collect instruments to unsubscribe from each connection
+            instruments_5depth = []
+            for sub in self.subscriptions_5depth.values():
+                instruments_5depth.append(sub["instrument"])
+
+            instruments_20depth = []
+            for sub in self.subscriptions_20depth.values():
+                instruments_20depth.append(sub["instrument"])
+
+            # Clear all subscription tracking
             self.subscriptions_5depth.clear()
             self.subscriptions_20depth.clear()
             self.subscriptions.clear()
-
-            # Clear fallback tracking
+            self.depth_20_accumulator.clear()
             self.depth_20_timeouts.clear()
             self.depth_20_data_received.clear()
             self.depth_20_fallbacks.clear()
-            self.depth_20_accumulator.clear()
 
-        # Disconnect from WebSocket servers
-        if self.ws_client_5depth:
-            try:
-                self.ws_client_5depth.disconnect()
-                self.logger.debug("Disconnected from Dhan 5-depth WebSocket")
-            except Exception as e:
-                self.logger.error(f"Error disconnecting 5-depth WebSocket: {e}")
+        # Send unsubscribe messages (outside lock to avoid deadlock)
+        if instruments_5depth and self.ws_client_5depth:
+            self.ws_client_5depth.unsubscribe(instruments_5depth)
 
-        if self.ws_client_20depth:
-            try:
-                self.ws_client_20depth.disconnect()
-                self.logger.debug("Disconnected from Dhan 20-depth WebSocket")
-            except Exception as e:
-                self.logger.error(f"Error disconnecting 20-depth WebSocket: {e}")
+        if instruments_20depth and self.ws_client_20depth:
+            self.ws_client_20depth.unsubscribe(instruments_20depth)
 
-        # Clean up ZeroMQ resources
-        self.cleanup_zmq()
         self.logger.info(
-            f"Dhan adapter disconnected and cleaned up after unsubscribing {unsubscribed_count} instruments"
+            f"Dhan adapter unsubscribed from {unsubscribed_count} instruments (connections kept alive)"
         )
 
         return self._create_success_response(
-            f"Unsubscribed from {unsubscribed_count} instruments and disconnected",
+            f"Unsubscribed from {unsubscribed_count} instruments",
             unsubscribed_count=unsubscribed_count,
         )
 
@@ -519,6 +556,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_error_5depth(self, ws, error):
         """Handle 5-depth connection error"""
         self.logger.error(f"Dhan 5-depth WebSocket error: {error}")
+        self._check_and_publish_fatal_error(ws, error, "5-depth")
 
     def _on_close_5depth(self, ws):
         """Handle 5-depth connection close"""
@@ -570,15 +608,20 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             market_data = self._normalize_5depth_data(data, symbol, exchange)
             if market_data:
                 # Determine topic based on data type
+                # Only publish modes the server understands (LTP, QUOTE, DEPTH)
+                # OI and prev_close are Dhan-specific packet types already
+                # included in full/quote data - skip them as standalone topics
                 mode_map = {
                     "ticker": "LTP",
                     "quote": "QUOTE",
                     "full": "DEPTH",
-                    "oi": "OI",
-                    "prev_close": "PREV_CLOSE",
                 }
 
-                mode_str = mode_map.get(data_type, "UNKNOWN")
+                mode_str = mode_map.get(data_type)
+                if not mode_str:
+                    # oi and prev_close packets don't map to server modes - skip
+                    return
+
                 topic = f"{exchange}_{symbol}_{mode_str}"
 
                 self.publish_market_data(topic, market_data)
@@ -607,6 +650,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_error_20depth(self, ws, error):
         """Handle 20-depth connection error"""
         self.logger.error(f"Dhan 20-depth WebSocket error: {error}")
+        self._check_and_publish_fatal_error(ws, error, "20-depth")
 
     def _on_close_20depth(self, ws):
         """Handle 20-depth connection close"""
@@ -761,11 +805,23 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.debug("Started fallback monitor thread")
 
     def stop_fallback_monitor(self):
-        """Stop the fallback monitoring thread"""
+        """Stop the fallback monitoring thread (also stops the adapter)"""
         self.running = False
+        self._stop_fallback_monitor_internal()
+
+    def _stop_fallback_monitor_internal(self):
+        """Internal method to stop fallback monitor without affecting running flag"""
         if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
-            self.fallback_monitor_thread.join(timeout=2)
-            self.logger.debug("Stopped fallback monitor thread")
+            try:
+                self.fallback_monitor_thread.join(timeout=2)
+            except Exception:
+                # Catches eventlet.timeout.Timeout on Linux/Gunicorn
+                pass
+            if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
+                self.logger.debug("Fallback monitor thread timeout - will be orphaned (daemon)")
+            else:
+                self.logger.debug("Fallback monitor thread stopped")
+        self.fallback_monitor_thread = None  # Clear thread reference
 
     def _fallback_monitor_loop(self):
         """Monitor 20-depth subscriptions and fallback to 5-depth if no data received"""
@@ -862,3 +918,79 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         except Exception as e:
             self.logger.error(f"Error performing fallback for {correlation_id}: {e}", exc_info=True)
+
+    def _check_and_publish_fatal_error(self, ws, error, connection_type: str):
+        """
+        Check if a WebSocket error is fatal (e.g., 429 Too Many Requests due to
+        expired data subscription) and log a clear message. Reconnection is already
+        stopped by the DhanWebSocket class when a fatal error is detected.
+        """
+        ws_client = None
+        if connection_type == "5-depth":
+            ws_client = self.ws_client_5depth
+        elif connection_type == "20-depth":
+            ws_client = self.ws_client_20depth
+
+        if ws_client and ws_client._fatal_error:
+            error_message = ws_client._fatal_error_message or str(error)
+            self.logger.error(
+                f"[DATA SUBSCRIPTION] Dhan {connection_type} WebSocket stopped: {error_message}"
+            )
+
+    def cleanup(self) -> None:
+        """
+        Full cleanup of all resources. Call this when completely done with the adapter.
+        """
+        self.logger.info("Running full cleanup of Dhan adapter...")
+
+        try:
+            # Disconnect handles all cleanup
+            self.disconnect()
+        except Exception as e:
+            self.logger.error(f"Error during cleanup disconnect: {e}")
+            # Force cleanup even if disconnect fails
+            try:
+                self._stop_fallback_monitor_internal()
+            except Exception:
+                pass
+            try:
+                self.cleanup_zmq()
+            except Exception:
+                pass
+
+        # Clear all references
+        self.ws_client_5depth = None
+        self.ws_client_20depth = None
+        self.fallback_monitor_thread = None
+
+        self.logger.info("Dhan adapter cleanup completed")
+
+    def __del__(self):
+        """Destructor to ensure resources are cleaned up"""
+        try:
+            # During garbage collection, logger may not be available
+            if hasattr(self, 'running') and self.running:
+                self.running = False
+
+            # Try to clean up WebSocket clients
+            if hasattr(self, 'ws_client_5depth') and self.ws_client_5depth:
+                try:
+                    self.ws_client_5depth.disconnect()
+                except Exception:
+                    pass
+                self.ws_client_5depth = None
+
+            if hasattr(self, 'ws_client_20depth') and self.ws_client_20depth:
+                try:
+                    self.ws_client_20depth.disconnect()
+                except Exception:
+                    pass
+                self.ws_client_20depth = None
+
+            # Try to clean up ZMQ
+            try:
+                self.cleanup_zmq()
+            except Exception:
+                pass
+        except Exception:
+            pass  # Ignore all errors during destruction
