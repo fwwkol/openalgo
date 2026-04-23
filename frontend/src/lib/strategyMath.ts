@@ -11,6 +11,34 @@ export type OptionType = 'CE' | 'PE'
 export type Side = 'BUY' | 'SELL'
 export type Segment = 'OPTION' | 'FUTURE'
 
+/**
+ * Classify a strike's moneyness relative to the ATM strike.
+ *
+ * Returns a short label like "ATM", "ITM1", "ITM2", "OTM1", "OTM3" where the
+ * number is how many strike-steps away from ATM the strike is.
+ *
+ * Call (CE):  strike < ATM → ITM    ·    strike > ATM → OTM
+ * Put (PE):   strike > ATM → ITM    ·    strike < ATM → OTM
+ *
+ * Returns null when inputs are insufficient (missing ATM, non-positive step).
+ */
+export function strikeMoneyness(
+  strike: number | undefined,
+  atmStrike: number | null,
+  strikeStep: number,
+  optionType: OptionType | undefined
+): { label: string; kind: 'ATM' | 'ITM' | 'OTM'; steps: number } | null {
+  if (strike === undefined || atmStrike === null || !optionType) return null
+  if (!isFinite(strikeStep) || strikeStep <= 0) return null
+  const rawSteps = (strike - atmStrike) / strikeStep
+  const steps = Math.round(rawSteps)
+  if (steps === 0) return { label: 'ATM', kind: 'ATM', steps: 0 }
+  const isCallITM = optionType === 'CE' && steps < 0
+  const isPutITM = optionType === 'PE' && steps > 0
+  const kind: 'ITM' | 'OTM' = isCallITM || isPutITM ? 'ITM' : 'OTM'
+  return { label: `${kind}${Math.abs(steps)}`, kind, steps }
+}
+
 export interface StrategyLeg {
   id: string
   segment: Segment
@@ -201,11 +229,73 @@ export interface PayoffSample {
 
 export interface PayoffResult {
   samples: PayoffSample[]
+  /**
+   * True mathematical maximum profit of the strategy at expiry.
+   * May be ``+Infinity`` for strategies with unlimited upside
+   * (e.g. Long Call, Long Synthetic, Call Ratio Back Spread).
+   */
   maxProfit: number
+  /**
+   * True mathematical maximum loss of the strategy at expiry.
+   * May be ``-Infinity`` for strategies with unlimited downside
+   * (e.g. Short Call, Short Synthetic, Short Straddle).
+   */
   maxLoss: number
   breakevens: number[]
   /** Indexes of samples where expiry crosses zero, used for shading. */
   zeroCrossings: number[]
+}
+
+/**
+ * Asymptotic slopes of the expiry payoff:
+ *   right = dP/dS as S → +∞  (sensitivity to far-upside moves)
+ *   left  = dP/dS as S → 0+  (sensitivity to far-downside moves)
+ *
+ * Used to detect unlimited-profit / unlimited-loss strategies that a finite
+ * sample window would otherwise report as capped. Closed / inactive legs
+ * contribute 0 (their P&L is locked or excluded).
+ *
+ * Slope contributions at S → +∞:
+ *   BUY  CE  → +qty    (call goes ITM, gains ₹1 per ₹1 spot rise)
+ *   SELL CE  → −qty
+ *   BUY  PE  →  0      (put worthless at high spot)
+ *   SELL PE  →  0
+ *   BUY  FUT → +qty
+ *   SELL FUT → −qty
+ *
+ * Slope contributions at S → 0+ (slope w.r.t. S, so a put gaining value as
+ * S drops gives a NEGATIVE slope):
+ *   BUY  CE  →  0
+ *   SELL CE  →  0
+ *   BUY  PE  → −qty
+ *   SELL PE  → +qty
+ *   BUY  FUT → +qty
+ *   SELL FUT → −qty
+ */
+function asymptoticSlopes(legs: StrategyLeg[]): { right: number; left: number } {
+  let right = 0
+  let left = 0
+  for (const leg of legs) {
+    if (!leg.active) continue
+    if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
+    const qty = leg.lots * leg.lotSize
+    const sign = leg.side === 'BUY' ? 1 : -1
+
+    if (leg.segment === 'FUTURE') {
+      right += sign * qty
+      left += sign * qty
+      continue
+    }
+
+    if (leg.segment === 'OPTION') {
+      if (leg.optionType === 'CE') {
+        right += sign * qty
+      } else if (leg.optionType === 'PE') {
+        left -= sign * qty
+      }
+    }
+  }
+  return { right, left }
 }
 
 export function computePayoff(
@@ -262,9 +352,63 @@ export function computePayoff(
     breakevens.push(a.underlying + frac * (b.underlying - a.underlying))
   }
 
-  // Handle infinities / NaN so downstream formatters are safe.
-  if (!isFinite(maxProfit)) maxProfit = 0
-  if (!isFinite(maxLoss)) maxLoss = 0
+  // ── True (mathematical) max profit / max loss ──
+  //
+  // The ±10% sample window used for the chart can silently cap true extrema:
+  // Long Synthetic keeps rising past +10%, Short Call keeps falling, etc.
+  // We can't rely on the sampled min/max — so compute them structurally:
+  //
+  //   1. Enumerate candidate underlying prices where the piecewise-linear
+  //      expiry payoff can have an extremum — every strike (kinks) plus 0
+  //      (the true left boundary, since spot ≥ 0) plus a point well past
+  //      the highest strike (right plateau when rightSlope == 0).
+  //   2. Evaluate the expiry payoff at each candidate.
+  //   3. For the right side, use the asymptotic slope: if the payoff is
+  //      still growing / falling past the last strike we override with
+  //      ±Infinity — the user sees "Unlimited" instead of a misleading
+  //      finite plateau value.
+  //
+  // The left side doesn't need an Infinity override because spot is
+  // floored at 0 — the payoff at S=0 is the true left extremum even when
+  // leftSlope is non-zero.
+  const slopes = asymptoticSlopes(legs)
+
+  const strikeSet = new Set<number>([0])
+  for (const leg of legs) {
+    if (!leg.active) continue
+    if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
+    if (leg.segment === 'OPTION' && leg.strike !== undefined) {
+      strikeSet.add(leg.strike)
+    } else if (leg.segment === 'FUTURE' && leg.price > 0) {
+      // Futures legs have no strike kink, but their entry price gives us
+      // a useful reference point to evaluate extrema near the current spot.
+      strikeSet.add(leg.price)
+    }
+  }
+  if (strikeSet.size > 1) {
+    const farRight = Math.max(...Array.from(strikeSet)) * 2
+    strikeSet.add(farRight)
+  }
+
+  let mathMaxProfit = -Infinity
+  let mathMaxLoss = Infinity
+  for (const s of strikeSet) {
+    const val = totalPnlAt(legs, s, daysAtExpiry, ivShiftPct, fallbackIv, now)
+    if (val > mathMaxProfit) mathMaxProfit = val
+    if (val < mathMaxLoss) mathMaxLoss = val
+  }
+
+  if (slopes.right > 0) mathMaxProfit = Infinity
+  if (slopes.right < 0) mathMaxLoss = -Infinity
+
+  maxProfit = mathMaxProfit
+  maxLoss = mathMaxLoss
+
+  // Empty leg list → leave max/min at 0 so the UI doesn't flash "-Infinity".
+  if (legs.length === 0) {
+    maxProfit = 0
+    maxLoss = 0
+  }
 
   return {
     samples,
