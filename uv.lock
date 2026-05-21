@@ -1151,6 +1151,18 @@ wheels = [
 ]
 
 [[package]]
+name = "joserfc"
+version = "1.6.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/de/c6/de8fdbdfa75c8ca04fead38a82d573df8a82906e984c349d58665f459558/joserfc-1.6.4.tar.gz", hash = "sha256:34ce5f499bfcc5e9ad4cc75077f9278ab3227b71da9aaf28f9ab705f8a560d3c", size = 231866, upload-time = "2026-04-13T13:15:40.632Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/f7/210b27752e972edb36d239315b08d3eb6b14824cc4a590da2337d195260b/joserfc-1.6.4-py3-none-any.whl", hash = "sha256:3e4a22b509b41908989237a045e25c8308d5fd47ab96bdae2dd8057c6451003a", size = 70464, upload-time = "2026-04-13T13:15:39.259Z" },
+]
+
+[[package]]
 name = "jschema-to-python"
 version = "1.2.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1520,7 +1532,7 @@ wheels = [
 
 [[package]]
 name = "openalgo"
-version = "1.0.49"
+version = "1.0.50"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1528,14 +1540,14 @@ dependencies = [
     { name = "pandas" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/55/bb/382ed877c314f7c659e8cfb918c4a43337d3045f0dbf5c1b0fc1ee70bab6/openalgo-1.0.49.tar.gz", hash = "sha256:e5b13f40e707f420ddd675b90894feea076b3eecee168c3c6980ba78ff75391e", size = 124803, upload-time = "2026-04-24T22:08:08.077Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/16/f6b602736d0afdc2d9f240dc2bd4c6e15a4f5212fafd0e29cfa99753a293/openalgo-1.0.50.tar.gz", hash = "sha256:6023ea9bf67d9791e480bec3717f29a4f2e6a55781d4f0ee71482f90e26f10b1", size = 127856, upload-time = "2026-05-17T13:59:17.235Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/e0/7cc15333cae2473274d7c8cb2c8c54a778a377103d9a8eaa71e8dab65ee2/openalgo-1.0.49-py3-none-any.whl", hash = "sha256:e693936a51dd2848048e2331cfaecab7f3e580563a1326a4952d45f84e6bb107", size = 117985, upload-time = "2026-04-24T22:08:06.533Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/19/8270a84300e08d9af261bd07a1e689ff6f8ce45eefd464514fb5f70d615c/openalgo-1.0.50-py3-none-any.whl", hash = "sha256:e995cf5a8255557888e7889592655e01fece7d79617c5fc9dd07128e38ecd322", size = 122116, upload-time = "2026-05-17T13:59:15.994Z" },
 ]
 
 [[package]]
 name = "openalgoui"
-version = "2.0.0.6"
+version = "2.0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "aniso8601" },
@@ -1595,6 +1607,7 @@ dependencies = [
     { name = "itsdangerous" },
     { name = "jedi" },
     { name = "jinja2" },
+    { name = "joserfc" },
     { name = "jsonschema" },
     { name = "jsonschema-specifications" },
     { name = "jupyter-client" },
@@ -1614,6 +1627,7 @@ dependencies = [
     { name = "nest-asyncio" },
     { name = "numpy" },
     { name = "openalgo" },
+    { name = "opengreeks" },
     { name = "ordered-set" },
     { name = "orjson" },
     { name = "packaging" },
@@ -1629,8 +1643,6 @@ dependencies = [
     { name = "psutil" },
     { name = "ptyprocess" },
     { name = "pure-eval" },
-    { name = "py-lets-be-rational" },
-    { name = "py-vollib" },
     { name = "pyarrow" },
     { name = "pycparser" },
     { name = "pydantic" },
@@ -1674,6 +1686,7 @@ dependencies = [
     { name = "tzlocal" },
     { name = "urllib3" },
     { name = "uvicorn" },
+    { name = "wars" },
     { name = "wcwidth" },
     { name = "websocket-client" },
     { name = "websockets" },
@@ -1690,6 +1703,7 @@ dependencies = [
 dev = [
     { name = "bandit", extra = ["sarif"] },
     { name = "detect-secrets" },
+    { name = "pip" },
     { name = "pip-audit" },
     { name = "pytest-timeout" },
     { name = "ruff" },
@@ -1754,6 +1768,7 @@ requires-dist = [
     { name = "itsdangerous", specifier = "==2.2.0" },
     { name = "jedi", specifier = "==0.19.2" },
     { name = "jinja2", specifier = "==3.1.6" },
+    { name = "joserfc", specifier = "==1.6.4" },
     { name = "jsonschema", specifier = "==4.26.0" },
     { name = "jsonschema-specifications", specifier = "==2023.12.1" },
     { name = "jupyter-client", specifier = "==8.8.0" },
@@ -1772,7 +1787,8 @@ requires-dist = [
     { name = "nbformat", specifier = "==5.10.4" },
     { name = "nest-asyncio", specifier = "==1.6.0" },
     { name = "numpy", specifier = "==2.4.4" },
-    { name = "openalgo", specifier = "==1.0.49" },
+    { name = "openalgo", specifier = "==1.0.50" },
+    { name = "opengreeks", specifier = ">=0.1.0" },
     { name = "ordered-set", specifier = "==4.1.0" },
     { name = "orjson", specifier = "==3.11.8" },
     { name = "packaging", specifier = "==24.1" },
@@ -1788,8 +1804,6 @@ requires-dist = [
     { name = "psutil", specifier = "==7.2.2" },
     { name = "ptyprocess", specifier = "==0.7.0" },
     { name = "pure-eval", specifier = "==0.2.3" },
-    { name = "py-lets-be-rational", specifier = "==1.0.1" },
-    { name = "py-vollib", specifier = "==1.0.1" },
     { name = "pyarrow", specifier = "==23.0.1" },
     { name = "pycparser", specifier = "==2.22" },
     { name = "pydantic", specifier = "==2.12.5" },
@@ -1804,7 +1818,7 @@ requires-dist = [
     { name = "python-dateutil", specifier = "==2.9.0.post0" },
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "python-engineio", specifier = "==4.13.1" },
-    { name = "python-multipart", specifier = "==0.0.26" },
+    { name = "python-multipart", specifier = "==0.0.27" },
     { name = "python-socketio", specifier = "==5.16.1" },
     { name = "python-telegram-bot", specifier = "==22.6" },
     { name = "pytz", specifier = "==2026.1.post1" },
@@ -1831,8 +1845,9 @@ requires-dist = [
     { name = "typing-inspection", specifier = ">=0.4.1" },
     { name = "tzdata", specifier = "==2025.3" },
     { name = "tzlocal", specifier = "==5.3.1" },
-    { name = "urllib3", specifier = "==2.6.3" },
+    { name = "urllib3", specifier = "==2.7.0" },
     { name = "uvicorn", specifier = "==0.44.0" },
+    { name = "wars", specifier = "==0.1.3" },
     { name = "wcwidth", specifier = "==0.6.0" },
     { name = "websocket-client", specifier = "==1.9.0" },
     { name = "websockets", specifier = "==15.0.1" },
@@ -1849,9 +1864,26 @@ requires-dist = [
 dev = [
     { name = "bandit", extras = ["sarif"], specifier = ">=1.9.3" },
     { name = "detect-secrets", specifier = ">=1.5.0" },
+    { name = "pip", specifier = ">=26.1" },
     { name = "pip-audit", specifier = ">=2.10.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "ruff", specifier = ">=0.14.14" },
+]
+
+[[package]]
+name = "opengreeks"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/8d/a132bacb880b6d36b442ca7c2255e9c640c1653affb357880879be58a039/opengreeks-0.1.0.tar.gz", hash = "sha256:9b3fb1d66344e5ee2818062f3ae48ba3479fb4ccd28e33332197de24ef586bdb", size = 29335, upload-time = "2026-05-20T16:25:32.102Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/dd/933168c426aebb55fd29637c81e2e275bd4c276092c3c282bff60fe173b5/opengreeks-0.1.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:d61c9d8549e8888acc8f1d9014e0322a00166b66f8ce60ca0a558e0de8135de6", size = 239599, upload-time = "2026-05-20T16:25:23.49Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/d3/6b4be23a1ce62fefa789a501ed34c05ffdd7e1ff23a43881808d734d2505/opengreeks-0.1.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:d6df4a367dc006825eb710af59edeeed6cd1fb5db55192a6fbd977b4ab1bdeaf", size = 230266, upload-time = "2026-05-20T16:25:25.515Z" },
+    { url = "https://files.pythonhosted.org/packages/87/3b/4a74f2ad960d4cd5bbccb4509a730aa7737756b971fe98256a79f709c3e0/opengreeks-0.1.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0d5b5a0a85e8df2805930f4a50f4884ee3c7602f21d5f11b06ffc2fd48608cc6", size = 242778, upload-time = "2026-05-20T16:25:27.013Z" },
+    { url = "https://files.pythonhosted.org/packages/73/99/890a39043f020edc2540483c345b4375c5415456fcada3dda2140f7a92f0/opengreeks-0.1.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c19655f534141a7992000f558eebd48503645be6521d179c17b763162ccae78a", size = 252470, upload-time = "2026-05-20T16:25:28.976Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/13/6fc5a45975533a9d6dea9968bbc25ff071a6a4f0b10b3693151177203a82/opengreeks-0.1.0-cp39-abi3-win_amd64.whl", hash = "sha256:9645ecd4a493d5982b33ffd2382b22a48f4ce4b837cf102487a57478223acab2", size = 184047, upload-time = "2026-05-20T16:25:30.36Z" },
 ]
 
 [[package]]
@@ -2085,11 +2117,11 @@ wheels = [
 
 [[package]]
 name = "pip"
-version = "26.0.1"
+version = "26.1.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/48/83/0d7d4e9efe3344b8e2fe25d93be44f64b65364d3c8d7bc6dc90198d5422e/pip-26.0.1.tar.gz", hash = "sha256:c4037d8a277c89b320abe636d59f91e6d0922d08a05b60e85e53b296613346d8", size = 1812747, upload-time = "2026-02-05T02:20:18.702Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b6/48/cb9b7a682f6fe01a4221e1728941dd4ac3cd9090a17db3779d6ff490b602/pip-26.1.1.tar.gz", hash = "sha256:d36762751d156a4ee895de8af39aa0abeeeb577f93a2eca6ab62467bbf0f8a78", size = 1840400, upload-time = "2026-05-04T19:02:21.248Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/f0/c81e05b613866b76d2d1066490adf1a3dbc4ee9d9c839961c3fc8a6997af/pip-26.0.1-py3-none-any.whl", hash = "sha256:bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b", size = 1787723, upload-time = "2026-02-05T02:20:16.416Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/eb/fea4d1d51c49832120f7f285d07306db3960f423a2612c6057caf3e8196f/pip-26.1.1-py3-none-any.whl", hash = "sha256:99cb1c2899893b075ff56e4ed0af55669a955b49ad7fb8d8603ecdaf4ed653fb", size = 1812777, upload-time = "2026-05-04T19:02:18.9Z" },
 ]
 
 [[package]]
@@ -2243,15 +2275,6 @@ wheels = [
 ]
 
 [[package]]
-name = "py-lets-be-rational"
-version = "1.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/58/bf/b292f35a4a2f0c02f4926442bd04d24c2a509749fb5e8e52190ac7ae3731/py_lets_be_rational-1.0.1.tar.gz", hash = "sha256:0e0788a4109e102a666f26d67276c0d3c2feb8a059e788354a90e565f2db0ed2", size = 18363, upload-time = "2017-04-13T16:16:59.68Z" }
-
-[[package]]
 name = "py-serializable"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2262,19 +2285,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/73/21/d250cfca8ff30c2e5
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9b/bf/7595e817906a29453ba4d99394e781b6fabe55d21f3c15d240f85dd06bb1/py_serializable-2.1.0-py3-none-any.whl", hash = "sha256:b56d5d686b5a03ba4f4db5e769dc32336e142fc3bd4d68a8c25579ebb0a67304", size = 23045, upload-time = "2025-07-21T09:56:46.848Z" },
 ]
-
-[[package]]
-name = "py-vollib"
-version = "1.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "py-lets-be-rational" },
-    { name = "scipy" },
-    { name = "simplejson" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/3c/26bd8cbaab3bd004a44157675fa8fe135f95fd4c62898c60c1670c339ba7/py_vollib-1.0.1.tar.gz", hash = "sha256:36e752eee16dcf52994c42aaf5372f0ab9cfd0d2aedc5462c4c1b6123c9ecf20", size = 19197, upload-time = "2017-04-10T10:20:25.181Z" }
 
 [[package]]
 name = "pyarrow"
@@ -2544,11 +2554,11 @@ wheels = [
 
 [[package]]
 name = "python-multipart"
-version = "0.0.26"
+version = "0.0.27"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/88/71/b145a380824a960ebd60e1014256dbb7d2253f2316ff2d73dfd8928ec2c3/python_multipart-0.0.26.tar.gz", hash = "sha256:08fadc45918cd615e26846437f50c5d6d23304da32c341f289a617127b081f17", size = 43501, upload-time = "2026-04-10T14:09:59.473Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/9b/f23807317a113dc36e74e75eb265a02dd1a4d9082abc3c1064acd22997c4/python_multipart-0.0.27.tar.gz", hash = "sha256:9870a6a8c5a20a5bf4f07c017bd1489006ff8836cff097b6933355ee2b49b602", size = 44043, upload-time = "2026-04-27T10:51:26.649Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/22/f1925cdda983ab66fc8ec6ec8014b959262747e58bdca26a4e3d1da29d56/python_multipart-0.0.26-py3-none-any.whl", hash = "sha256:c0b169f8c4484c13b0dcf2ef0ec3a4adb255c4b7d18d8e420477d2b1dd03f185", size = 28847, upload-time = "2026-04-10T14:09:58.131Z" },
+    { url = "https://files.pythonhosted.org/packages/99/78/4126abcbdbd3c559d43e0db7f7b9173fc6befe45d39a2856cc0b8ec2a5a6/python_multipart-0.0.27-py3-none-any.whl", hash = "sha256:6fccfad17a27334bd0193681b369f476eda3409f17381a2d65aa7df3f7275645", size = 29254, upload-time = "2026-04-27T10:51:24.997Z" },
 ]
 
 [[package]]
@@ -2701,6 +2711,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8f/b2/7fc2931bfae0af02d5f53b174e9cf701adbb35f39d69c2af63d4a39f81a9/qrcode-8.2.tar.gz", hash = "sha256:35c3f2a4172b33136ab9f6b3ef1c00260dd2f66f858f24d88418a015f446506c", size = 43317, upload-time = "2025-05-01T15:44:24.726Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dd/b8/d2d6d731733f51684bbf76bf34dab3b70a9148e8f2cef2bb544fccec681a/qrcode-8.2-py3-none-any.whl", hash = "sha256:16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f", size = 45986, upload-time = "2025-05-01T15:44:22.781Z" },
+]
+
+[package.optional-dependencies]
+pil = [
+    { name = "pillow" },
 ]
 
 [[package]]
@@ -3227,11 +3242,11 @@ wheels = [
 
 [[package]]
 name = "urllib3"
-version = "2.6.3"
+version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6661c76461e25f024d5a38a46f04aaca912426a2b1d3/urllib3-2.6.3.tar.gz", hash = "sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed", size = 435556, upload-time = "2026-01-07T16:24:43.925Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
 ]
 
 [[package]]
@@ -3245,6 +3260,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5e/da/6eee1ff8b6cbeed47eeb5229749168e81eb4b7b999a1a15a7176e51410c9/uvicorn-0.44.0.tar.gz", hash = "sha256:6c942071b68f07e178264b9152f1f16dfac5da85880c4ce06366a96d70d4f31e", size = 86947, upload-time = "2026-04-06T09:23:22.826Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/23/a5bbd9600dd607411fa644c06ff4951bec3a4d82c4b852374024359c19c0/uvicorn-0.44.0-py3-none-any.whl", hash = "sha256:ce937c99a2cc70279556967274414c087888e8cec9f9c94644dfca11bd3ced89", size = 69425, upload-time = "2026-04-06T09:23:21.524Z" },
+]
+
+[[package]]
+name = "wars"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "qrcode", extra = ["pil"] },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/9c/c801518ec5b3edd5695601cccaac9eabcd4d702f111839072da2c4e97b3e/wars-0.1.3-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:31b261f52a8df71a3888f0c600bf577e195035ebcb2f2ab3cdf933de2d7520a1", size = 6485955, upload-time = "2026-05-17T02:13:11.852Z" },
+    { url = "https://files.pythonhosted.org/packages/a1/dc/28ddb0ccff13f34864ebbf57bacf3a703f03171f8628b44ce219ecc320e2/wars-0.1.3-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:bf5f827106b9ca575e910eaf9542d95ffc8429ab14eb7f419e4409aeb0ceba56", size = 6082421, upload-time = "2026-05-17T02:13:14.284Z" },
+    { url = "https://files.pythonhosted.org/packages/44/01/024d3898c6bc6c895f243e900fe431bbe5bbffa4a0e401bc3d75be279f77/wars-0.1.3-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:aba35e9331bc0644ea535e0e2a99f169d8fce467680ccde89fa0823f79dfc44a", size = 6222786, upload-time = "2026-05-17T02:13:16.321Z" },
+    { url = "https://files.pythonhosted.org/packages/53/6a/18852e5159004246b00f836b3481e2a028aba50e02d6c3f71b63b746ede6/wars-0.1.3-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3fd4a40822a301f727b620c2e59ef04c86e65b6d36a80c446e6a0718244a112a", size = 6743583, upload-time = "2026-05-17T02:13:18.599Z" },
+    { url = "https://files.pythonhosted.org/packages/78/cb/d0820994018014527f048b8f321d3064dd1c0a261e4f257ed9ff136b4810/wars-0.1.3-cp38-abi3-win_amd64.whl", hash = "sha256:612d5bdf5a0d934d064ae4c0d8c549dbd065afac6a039f816a5a5d6fb7f122bd", size = 7015317, upload-time = "2026-05-17T02:13:20.5Z" },
 ]
 
 [[package]]

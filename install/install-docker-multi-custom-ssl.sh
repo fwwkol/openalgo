@@ -833,14 +833,23 @@ for i in "${!CONF_DOMAINS[@]}"; do
         sed -i "s|<broker>|$BROKER|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$PEPPER|g" "$ENV_FILE"
+
+        # Capture build-time git info for the diagnostics page (issue #1388).
+        # .git/ is dockerignored, so the running container has no .git/HEAD;
+        # surface the values via env from the cloned source instead.
+        GIT_BRANCH=$(cd "$INSTANCE_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+        GIT_COMMIT=$(cd "$INSTANCE_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "")
+        echo "OPENALGO_GIT_BRANCH = '${GIT_BRANCH}'" >> "$ENV_FILE"
+        echo "OPENALGO_GIT_COMMIT = '${GIT_COMMIT}'" >> "$ENV_FILE"
         # Each instance is published only on 127.0.0.1 with nginx in front;
         # trust the proxy's X-Forwarded-For / X-Real-IP.
         sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" "$ENV_FILE"
-        # .env is bind-mounted read-only into the container; it must remain
-        # readable to the container's appuser (UID 1000). chmod 600 with a
-        # root-owned host file makes start.sh exit with "Error: .env file
-        # not found." See https://github.com/marketcalls/openalgo/issues/960.
-        chmod 644 "$ENV_FILE"
+        # .env is bind-mounted read+write into the container so auto-rotation
+        # of compromised APP_KEY/API_KEY_PEPPER (utils/env_check.py) can run.
+        # Container runs as appuser (UID 1000); chown to UID 1000 + chmod 600
+        # gives appuser read+write while keeping the file private on the host.
+        chown 1000:1000 "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
         
         # XTS
         if [ ! -z "$M_KEY" ]; then
@@ -883,7 +892,7 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
     environment:
       - FLASK_ENV=production
       - FLASK_DEBUG=0

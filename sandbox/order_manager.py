@@ -1,6 +1,6 @@
 # sandbox/order_manager.py
 """
-Order Manager - Handles virtual order placement and validation
+Order Manager - Handles sandbox order placement and validation
 
 Features:
 - Order validation (symbol, quantity, price, etc.)
@@ -26,6 +26,7 @@ from database.sandbox_db import SandboxOrders, SandboxPositions, SandboxTrades, 
 from database.symbol import SymToken
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
+from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 from utils.symbol_utils import is_future, is_option
 
@@ -33,7 +34,7 @@ logger = get_logger(__name__)
 
 
 class OrderManager:
-    """Manages virtual orders for sandbox mode"""
+    """Manages sandbox orders for sandbox mode"""
 
     def __init__(self, user_id):
         self.user_id = user_id
@@ -1173,10 +1174,11 @@ class OrderManager:
             except (ValueError, TypeError):
                 return False, "Invalid trigger_price"
 
-        # Validate exchange
-        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]
-        if order_data["exchange"].upper() not in valid_exchanges:
-            return False, f"Invalid exchange. Must be one of {', '.join(valid_exchanges)}"
+        # Validate exchange — use the central VALID_EXCHANGES so adding a new
+        # exchange (NCO, GLOBAL_INDEX, ...) is a one-place change in
+        # utils/constants.py.
+        if order_data["exchange"].upper() not in VALID_EXCHANGES:
+            return False, f"Invalid exchange. Must be one of {', '.join(VALID_EXCHANGES)}"
 
         return True, "Validation passed"
 

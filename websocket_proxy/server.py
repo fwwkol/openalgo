@@ -20,6 +20,11 @@ from utils.logging import get_logger, highlight_url
 
 from .base_adapter import BaseBrokerWebSocketAdapter
 from .broker_factory import create_broker_adapter
+from .mode_utils import (
+    MODE_BY_UPPER_LABEL as _MODE_BY_UPPER_LABEL,
+    normalize_mode,
+    normalize_mode_or_none,
+)
 from .port_check import find_available_port, is_port_in_use
 
 # Initialize logger
@@ -76,8 +81,10 @@ class WebSocketProxy:
         self.last_message_time: dict[tuple[str, str, int], float] = {}
         self.message_throttle_interval = 0.05  # 50ms minimum between messages
 
-        # PERFORMANCE OPTIMIZATION 3: Pre-compute mode mappings
-        self.MODE_MAP = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
+        # MODE_MAP retained for any external consumers that imported it from
+        # this class. New code should call normalize_mode() / normalize_mode_or_none()
+        # at module level — those accept case-insensitive strings AND ints.
+        self.MODE_MAP = dict(_MODE_BY_UPPER_LABEL)
 
         # RESOURCE MONITORING: Track metrics for health checks
         self._stats_lock = aio.Lock() if hasattr(aio, 'Lock') else None
@@ -221,7 +228,7 @@ class WebSocketProxy:
                             # Force close the server without waiting
                             try:
                                 self.server.close()
-                            except:
+                            except Exception:
                                 pass
                         else:
                             raise
@@ -451,7 +458,7 @@ class WebSocketProxy:
                     # Send error to client but don't disconnect
                     try:
                         await self.send_error(client_id, "PROCESSING_ERROR", str(e))
-                    except:
+                    except Exception:
                         pass
         except websockets.exceptions.ConnectionClosed as e:
             logger.info(f"Client disconnected: {client_id}, code: {e.code}, reason: {e.reason}")
@@ -984,14 +991,24 @@ class WebSocketProxy:
 
         # Get subscription parameters
         symbols = data.get("symbols") or []  # Handle array of symbols
-        mode_str = data.get("mode", "Quote")  # Get mode as string (LTP, Quote, Depth)
+        raw_mode = data.get("mode", "Quote")  # Accepts 1/2/3 or LTP/Quote/Depth (any case)
         depth_level = data.get("depth", 5)  # Default to 5 levels
+        # Optional request_id (issue #1376): when the client supplies one, we
+        # echo it back in the response so the client can correlate this ack
+        # with the originating request and learn per-symbol success/failure
+        # rather than guessing from tick activity.
+        request_id = data.get("request_id")
 
-        # Map string mode to numeric mode
-        mode_mapping = {"LTP": 1, "Quote": 2, "Depth": 3}
-
-        # Convert string mode to numeric if needed
-        mode = mode_mapping.get(mode_str, mode_str) if isinstance(mode_str, str) else mode_str
+        # Normalize mode through the single source of truth. Previously the
+        # in-handler mapping was Title-Case-only and silently passed through
+        # unknown strings (e.g. documented "QUOTE") — broker adapters then
+        # received the raw string instead of a numeric mode. See issue #1375.
+        try:
+            mode, mode_label = normalize_mode(raw_mode)
+        except (ValueError, TypeError) as e:
+            await self.send_error(client_id, "INVALID_MODE", str(e))
+            return
+        mode_str = mode_label  # Canonical label echoed back in subscribe response
 
         # Handle case where a single symbol is passed directly instead of as an array
         if not symbols and (data.get("symbol") and data.get("exchange")):
@@ -1070,16 +1087,16 @@ class WebSocketProxy:
                 )
 
         # Send combined response
-        await self.send_message(
-            client_id,
-            {
-                "type": "subscribe",
-                "status": "success" if subscription_success else "partial",
-                "subscriptions": subscription_responses,
-                "message": "Subscription processing complete",
-                "broker": broker_name,
-            },
-        )
+        response = {
+            "type": "subscribe",
+            "status": "success" if subscription_success else "partial",
+            "subscriptions": subscription_responses,
+            "message": "Subscription processing complete",
+            "broker": broker_name,
+        }
+        if request_id is not None:
+            response["request_id"] = request_id
+        await self.send_message(client_id, response)
 
     async def unsubscribe_client(self, client_id, data):
         """
@@ -1101,14 +1118,22 @@ class WebSocketProxy:
 
         # Get unsubscription parameters for specific symbols
         symbols = data.get("symbols") or []
+        # Optional request_id (issue #1376) — echoed in the response so callers
+        # can correlate this ack with the originating unsubscribe request.
+        request_id = data.get("request_id")
 
         # Handle single symbol format
         if not symbols and not is_unsubscribe_all and (data.get("symbol") and data.get("exchange")):
+            try:
+                _mode_int, _ = normalize_mode(data.get("mode", 2))
+            except (ValueError, TypeError) as e:
+                await self.send_error(client_id, "INVALID_MODE", str(e))
+                return
             symbols = [
                 {
                     "symbol": data.get("symbol"),
                     "exchange": data.get("exchange"),
-                    "mode": data.get("mode", 2),  # Default to Quote mode
+                    "mode": _mode_int,
                 }
             ]
 
@@ -1197,7 +1222,21 @@ class WebSocketProxy:
             for symbol_info in symbols:
                 symbol = symbol_info.get("symbol")
                 exchange = symbol_info.get("exchange")
-                mode = symbol_info.get("mode", 2)  # Default to Quote mode
+                # Normalize mode (accepts 1/2/3 or LTP/Quote/Depth case-insensitive).
+                # Default to Quote mode (2) if absent.
+                try:
+                    mode, _ = normalize_mode(symbol_info.get("mode", 2))
+                except (ValueError, TypeError) as e:
+                    failed_unsubscriptions.append(
+                        {
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "status": "error",
+                            "message": str(e),
+                            "broker": broker_name,
+                        }
+                    )
+                    continue
 
                 if not symbol or not exchange:
                     continue  # Skip invalid symbols
@@ -1266,17 +1305,17 @@ class WebSocketProxy:
         elif len(failed_unsubscriptions) > 0 and len(successful_unsubscriptions) == 0:
             status = "error"
 
-        await self.send_message(
-            client_id,
-            {
-                "type": "unsubscribe",
-                "status": status,
-                "message": "Unsubscription processing complete",
-                "successful": successful_unsubscriptions,
-                "failed": failed_unsubscriptions,
-                "broker": broker_name,
-            },
-        )
+        unsub_response = {
+            "type": "unsubscribe",
+            "status": status,
+            "message": "Unsubscription processing complete",
+            "successful": successful_unsubscriptions,
+            "failed": failed_unsubscriptions,
+            "broker": broker_name,
+        }
+        if request_id is not None:
+            unsub_response["request_id"] = request_id
+        await self.send_message(client_id, unsub_response)
 
     async def send_message(self, client_id, message):
         """
@@ -1530,8 +1569,16 @@ class WebSocketProxy:
                 mode_str = parts[-1]
                 remaining = parts[:-1]  # everything except mode
 
-                # Detect NSE_INDEX / BSE_INDEX exchange prefix (two segments)
-                if len(remaining) >= 2 and remaining[0] in ("NSE", "BSE") and remaining[1] == "INDEX":
+                # Detect two-segment exchange prefixes (NSE_INDEX, BSE_INDEX,
+                # MCX_INDEX, GLOBAL_INDEX, NSEIX_INDEX). Add new index/multi-segment
+                # exchanges here when introducing them.
+                _MULTI_SEGMENT_EXCHANGE_PREFIXES = (
+                    ("NSE", "INDEX"),
+                    ("BSE", "INDEX"),
+                    ("MCX", "INDEX"),
+                    ("GLOBAL", "INDEX"),
+                )
+                if len(remaining) >= 2 and (remaining[0], remaining[1]) in _MULTI_SEGMENT_EXCHANGE_PREFIXES:
                     exchange = f"{remaining[0]}_{remaining[1]}"
                     symbol = "_".join(remaining[2:])
                 else:
@@ -1542,12 +1589,13 @@ class WebSocketProxy:
                     logger.warning(f"Invalid topic format (no symbol): {topic_str}")
                     continue
 
-                # OPTIMIZATION: Use pre-computed mode map
-                mode = self.MODE_MAP.get(mode_str)
-
-                if not mode:
+                # Route through the single normalizer so topic parsing stays
+                # consistent with client-side mode handling.
+                normalized = normalize_mode_or_none(mode_str)
+                if normalized is None:
                     logger.warning(f"Invalid mode in topic: {mode_str}")
                     continue
+                mode, _ = normalized
 
                 # No server-side LTP throttling: the previous time-based
                 # throttle dropped intra-window ticks instead of coalescing

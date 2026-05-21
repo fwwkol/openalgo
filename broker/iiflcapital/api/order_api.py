@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,6 +17,19 @@ logger = get_logger(__name__)
 
 _DIRECT_ORDER_KEYS = {"instrumentId", "exchange", "transactionType", "quantity"}
 _SUCCESS_STATUSES = {"success", "ok"}
+_ORDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _safe_order_id(orderid: Any) -> str:
+    """Validate orderid for inclusion in a URL path.
+
+    Rejects values containing '/', '?', '..', whitespace, etc. that could
+    pivot the request to a different endpoint.
+    """
+    candidate = str(orderid or "").strip()
+    if not candidate or not _ORDER_ID_PATTERN.match(candidate):
+        raise ValueError(f"Invalid orderid: {candidate!r}")
+    return candidate
 
 _OPEN_STATUSES = {
     "OPEN",
@@ -25,6 +39,22 @@ _OPEN_STATUSES = {
     "NEW",
     "PUT ORDER REQ RECEIVED",
 }
+
+
+def _log_rejected_orders(rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        if str(row.get("orderStatus", "")).upper() != "REJECTED":
+            continue
+
+        broker_order_id = row.get("brokerOrderId") or row.get("exchangeOrderId") or "unknown"
+        symbol = row.get("tradingSymbol") or row.get("formattedInstrumentName") or "unknown"
+        rejection_reason = row.get("rejectionReason") or "No rejection reason provided by broker"
+        logger.warning(
+            "IIFL Capital rejected order %s for %s: %s",
+            broker_order_id,
+            symbol,
+            rejection_reason,
+        )
 
 
 def _headers(auth: str) -> dict:
@@ -85,17 +115,17 @@ def _extract_rows(payload):
 
 def _ok(payload: dict) -> bool:
     status = str(payload.get("status", "")).lower()
-    if status == "ok":
+    if status in _SUCCESS_STATUSES:
         return True
 
     result = payload.get("result")
     if isinstance(result, dict):
         nested_status = str(result.get("status", "")).lower()
-        if nested_status in ("success", "ok"):
+        if nested_status in _SUCCESS_STATUSES:
             return True
     if isinstance(result, list) and result:
         nested_status = str(result[0].get("status", "")).lower()
-        if nested_status in ("success", "ok"):
+        if nested_status in _SUCCESS_STATUSES:
             return True
 
     return False
@@ -152,13 +182,36 @@ def _is_success_result(result: dict) -> bool:
 
 
 def get_order_book(auth):
-    _, data = _request("/orders", auth)
-    return data
+    response, data = _request("/orders", auth)
+
+    if response.status_code == 200:
+        rows = data if isinstance(data, list) else _extract_rows(data)
+        if rows:
+            _log_rejected_orders(rows)
+        if isinstance(data, list):
+            return data
+        if rows or _ok(data):
+            return data
+
+    return {
+        "status": "error",
+        "message": _extract_message(data, "Failed to fetch order book"),
+    }
 
 
 def get_trade_book(auth):
-    _, data = _request("/trades", auth)
-    return data
+    response, data = _request("/trades", auth)
+
+    if response.status_code == 200:
+        if isinstance(data, list):
+            return data
+        if _extract_rows(data) or _ok(data):
+            return data
+
+    return {
+        "status": "error",
+        "message": _extract_message(data, "Failed to fetch trade book"),
+    }
 
 
 def get_positions(auth):
@@ -211,7 +264,9 @@ def place_order_api(data, auth):
     payload = order_payload if isinstance(order_payload, list) else [order_payload]
     logger.debug(f"IIFL Capital place order payload: {payload}")
     response, response_data = _request("/orders", auth, method="POST", payload=payload)
-    logger.debug(f"IIFL Capital place order response: {response_data}")
+    logger.info(f"IIFL Capital place order response status: {response.status_code}")
+    # Raw body may include broker order IDs / account context — debug only.
+    logger.debug(f"IIFL Capital place order raw response: {response_data}")
 
     result = _first_result(response_data)
     order_id = result.get("brokerOrderId")
@@ -220,9 +275,11 @@ def place_order_api(data, auth):
         return _status_wrapper(200), response_data, order_id
 
     error_status = response.status_code if response.status_code != 200 else 400
+    error_message = _extract_message(response_data, "Failed to place order")
+    logger.warning(f"IIFL Capital place order failed: {error_message}")
     error_response = {
         "status": "error",
-        "message": _extract_message(response_data, "Failed to place order"),
+        "message": error_message,
     }
     return _status_wrapper(error_status), error_response, None
 
@@ -318,29 +375,42 @@ def close_all_positions(current_api_key, auth):
 
 
 def cancel_order(orderid, auth):
-    response, response_data = _request(f"/orders/{orderid}", auth, method="DELETE")
+    try:
+        safe_id = _safe_order_id(orderid)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}, 400
+
+    logger.debug(f"IIFL Capital cancel order request for {safe_id}")
+    response, response_data = _request(f"/orders/{safe_id}", auth, method="DELETE")
+    logger.debug(f"IIFL Capital cancel order response for {safe_id}: {response_data}")
 
     if response.status_code == 200 and _ok(response_data):
-        return {"status": "success", "orderid": str(orderid)}, 200
+        return {"status": "success", "orderid": safe_id}, 200
 
     return {
         "status": "error",
-        "message": response_data.get("message", "Failed to cancel order"),
+        "message": _extract_message(response_data, "Failed to cancel order"),
     }, response.status_code
 
 
 def modify_order(data, auth):
-    order_id = data.get("orderid")
+    try:
+        safe_id = _safe_order_id(data.get("orderid"))
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}, 400
+
     payload = transform_modify_order_data(data)
 
-    response, response_data = _request(f"/orders/{order_id}", auth, method="PUT", payload=[payload])
+    logger.debug(f"IIFL Capital modify order payload for {safe_id}: {payload}")
+    response, response_data = _request(f"/orders/{safe_id}", auth, method="PUT", payload=payload)
+    logger.debug(f"IIFL Capital modify order response for {safe_id}: {response_data}")
 
     if response.status_code == 200 and _ok(response_data):
-        return {"status": "success", "orderid": str(order_id)}, 200
+        return {"status": "success", "orderid": safe_id}, 200
 
     return {
         "status": "error",
-        "message": response_data.get("message", "Failed to modify order"),
+        "message": _extract_message(response_data, "Failed to modify order"),
     }, response.status_code
 
 
